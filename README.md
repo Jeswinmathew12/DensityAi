@@ -64,7 +64,7 @@ src/hooks/useOccupancyData.js  Data-access layer (currently steps the fake gener
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
-src/components/                KpiCards, OccupancyTrend, ZoneTable, TrafficChart, Insights
+src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
 ```
 
 ### Data
