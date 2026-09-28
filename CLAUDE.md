@@ -26,10 +26,12 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 ```
 public/index.html              HTML entry
 src/index.js                   React bootstrap
-src/App.jsx                    Main dashboard (currently one large component)
+src/App.jsx                    Dashboard layout: sidebar nav + composes the section components
 src/App.css                    All styles + CSS variables
+src/hooks/useOccupancyData.js  Data-access layer (currently polls the fake generators)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
-src/components/                Place for extracted components (currently empty)
+src/utils/status.js            Shared status helper (thresholds live here only)
+src/components/                KpiCards, OccupancyTrend, ZoneTable, TrafficChart, Insights
 ```
 
 ## Data
@@ -45,7 +47,7 @@ src/components/                Place for extracted components (currently empty)
 
 ## Conventions
 - Functional components and hooks only.
-- As `App.jsx` grows, extract sections into `src/components/` (e.g., `KpiCards.jsx`, `OccupancyTrend.jsx`, `ZoneTable.jsx`, `TrafficChart.jsx`).
+- Put new dashboard sections in their own file under `src/components/` rather than growing `App.jsx`.
 - Ask before adding new npm dependencies.
 - Keep the app runnable with `npm start` after every change.
 - Never commit secrets, API keys, or `.env` files.
