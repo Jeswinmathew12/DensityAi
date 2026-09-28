@@ -8,7 +8,7 @@ import Insights from '../components/Insights';
 export default function DashboardPage({ zones, trends, traffic, stats, insights }) {
   return (
     <>
-      <h1>Occupancy Insight</h1>
+      <h1>Occupancy</h1>
       <KpiCards zones={zones} stats={stats} />
       <div className="grid-2">
         <OccupancyTrend data={trends[zones[0].id]} />

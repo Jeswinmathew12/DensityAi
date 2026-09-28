@@ -23,11 +23,11 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <div className="brand">DensityAI</div>
+        <div className="brand"><span className="brand-mark" aria-hidden><i /><i /><i /><i /></span>DensityAI</div>
         <nav>
           {NAV.map(({ id, label, icon: Icon }) => (
             <a key={id} className={`nav-item${id === active.id ? ' active' : ''}`} href={`#/${id}`}>
-              <Icon size={18} /> {label}
+              <Icon size={18} aria-hidden /> {label}
             </a>
           ))}
         </nav>

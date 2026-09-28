@@ -1,4 +1,5 @@
 import React from 'react';
+import SeatStrip from '../components/SeatStrip';
 import { getStatus } from '../utils/status';
 
 export default function ZonesPage({ zones }) {
@@ -14,14 +15,14 @@ export default function ZonesPage({ zones }) {
                 <h2>{z.name}</h2>
                 <span className={`badge status-${s.key}`}>{s.label}</span>
               </div>
-              <div className={`kpi-value status-${s.key}-text`}>{z.occupancy}</div>
-              <div className="kpi-sub">of {z.capacity} capacity ({Math.round(s.pct)}%)</div>
-              <div className="meter">
-                <div className={`meter-fill status-${s.key}`} style={{ width: `${Math.min(100, s.pct)}%` }} />
-              </div>
-              <div className="kpi-sub">
-                {z.cameras} camera{z.cameras === 1 ? '' : 's'} - updated {new Date(z.lastUpdated).toLocaleTimeString()}
-              </div>
+              <p className="zone-count">
+                <span className={`zone-num status-${s.key}-text`}>{z.occupancy}</span>
+                <span className="kpi-sub">of {z.capacity} · {Math.round(s.pct)}% full</span>
+              </p>
+              <SeatStrip count={z.occupancy} capacity={z.capacity} size="sm" />
+              <p className="kpi-sub zone-meta">
+                {z.cameras} camera{z.cameras === 1 ? '' : 's'}, updated {new Date(z.lastUpdated).toLocaleTimeString()}
+              </p>
             </div>
           );
         })}

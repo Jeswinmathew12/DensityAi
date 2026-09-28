@@ -7,7 +7,7 @@ export default function Insights({ items }) {
       <h2>Insights</h2>
       <ul className="insights">
         {items.map((i) => (
-          <li key={i.id}><Lightbulb size={16} /> {i.text}</li>
+          <li key={i.id}><Lightbulb size={16} aria-hidden /> <span>{i.text}</span></li>
         ))}
       </ul>
     </div>
