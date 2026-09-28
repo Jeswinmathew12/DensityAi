@@ -1,0 +1,4 @@
+# Downloaded model files and TensorRT engines (see scripts/download_peoplenet.sh)
+models/peoplenet/*
+!models/peoplenet/.gitkeep
+*.engine
