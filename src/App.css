@@ -74,3 +74,24 @@ body {
   .sidebar { width: 100%; }
   .kpi-row, .grid-2 { grid-template-columns: 1fr; }
 }
+
+.nav-item { cursor: pointer; }
+.nav-item:hover { background: var(--bg); }
+
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.trends-stats { grid-template-columns: repeat(3, 1fr); }
+
+.zone-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.zone-card-head { display: flex; justify-content: space-between; align-items: center; }
+.status-available-text { color: var(--green); }
+.status-moderate-text { color: var(--blue); }
+.status-busy-text { color: var(--red); }
+.meter { height: 8px; background: var(--bg); border-radius: 999px; margin: 12px 0; overflow: hidden; }
+.meter-fill { height: 100%; border-radius: 999px; }
+.meter-fill.status-available { background: var(--green); }
+.meter-fill.status-moderate { background: var(--blue); }
+.meter-fill.status-busy { background: var(--red); }
+
+@media (max-width: 900px) {
+  .trends-stats { grid-template-columns: 1fr; }
+}

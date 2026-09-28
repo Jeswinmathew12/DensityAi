@@ -1,45 +1,39 @@
 import React from 'react';
 import { LayoutDashboard, Users, BarChart3, Settings } from 'lucide-react';
 import useOccupancyData from './hooks/useOccupancyData';
-import KpiCards from './components/KpiCards';
-import OccupancyTrend from './components/OccupancyTrend';
-import ZoneTable from './components/ZoneTable';
-import TrafficChart from './components/TrafficChart';
-import Insights from './components/Insights';
+import useHashRoute from './hooks/useHashRoute';
+import DashboardPage from './pages/DashboardPage';
+import ZonesPage from './pages/ZonesPage';
+import TrendsPage from './pages/TrendsPage';
+import SettingsPage from './pages/SettingsPage';
 
 const NAV = [
-  { label: 'Dashboard', icon: LayoutDashboard },
-  { label: 'Zones', icon: Users },
-  { label: 'Trends', icon: BarChart3 },
-  { label: 'Settings', icon: Settings },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, page: DashboardPage },
+  { id: 'zones', label: 'Zones', icon: Users, page: ZonesPage },
+  { id: 'trends', label: 'Trends', icon: BarChart3, page: TrendsPage },
+  { id: 'settings', label: 'Settings', icon: Settings, page: SettingsPage },
 ];
 
 export default function App() {
-  const { zones, trend, traffic, stats, insights } = useOccupancyData();
+  const data = useOccupancyData();
+  const route = useHashRoute();
+  const active = NAV.find((n) => n.id === route) || NAV[0];
+  const Page = active.page;
 
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">DensityAI</div>
         <nav>
-          {NAV.map(({ label, icon: Icon }, i) => (
-            <a key={label} className={`nav-item${i === 0 ? ' active' : ''}`} href="#top">
+          {NAV.map(({ id, label, icon: Icon }) => (
+            <a key={id} className={`nav-item${id === active.id ? ' active' : ''}`} href={`#/${id}`}>
               <Icon size={18} /> {label}
             </a>
           ))}
         </nav>
       </aside>
-      <main className="content" id="top">
-        <h1>Occupancy Insight</h1>
-        <KpiCards zones={zones} stats={stats} />
-        <div className="grid-2">
-          <OccupancyTrend data={trend} />
-          <ZoneTable zones={zones} />
-        </div>
-        <div className="grid-2">
-          <TrafficChart data={traffic} />
-          <Insights items={insights} />
-        </div>
+      <main className="content">
+        <Page {...data} />
       </main>
     </div>
   );

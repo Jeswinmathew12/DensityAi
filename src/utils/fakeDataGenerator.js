@@ -8,13 +8,23 @@ const ZONES = [
 
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
+// Advance live counts by a small random step so they drift like a real feed.
+// Same shape as generateZones(); pass the previous zones in.
+export function stepZones(zones) {
+  return zones.map((z) => ({
+    ...z,
+    occupancy: Math.max(0, Math.min(z.capacity, z.occupancy + rand(-2, 2))),
+    lastUpdated: new Date().toISOString(),
+  }));
+}
+
 // Smooth-ish daily curve: 0..1 peaking mid-afternoon.
 const dayCurve = (hour) => Math.max(0, Math.sin(((hour - 7) / 12) * Math.PI));
 
 export function generateZones() {
   return ZONES.map((z) => ({
     ...z,
-    occupancy: Math.min(z.capacity, rand(0, z.capacity)),
+    occupancy: rand(Math.round(z.capacity * 0.2), Math.round(z.capacity * 0.6)),
     lastUpdated: new Date().toISOString(),
   }));
 }
