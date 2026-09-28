@@ -26,6 +26,7 @@ The Jetson pipeline and API are planned in [occupancy-tracker-plan.md](occupancy
 
 ### Features
 
+- Four pages via the sidebar: Dashboard, Zones, Trends, Settings
 - Live occupancy count with a status color: green = Available, blue = Moderate, red = Busy
 - 24-hour occupancy trend
 - Per-zone table with count, capacity and status
@@ -56,9 +57,11 @@ Status thresholds are under 50% Available, 50-75% Moderate and over 75% Busy. Th
 ```
 public/index.html              HTML entry
 src/index.js                   React bootstrap
-src/App.jsx                    Dashboard layout: sidebar nav + section components
+src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
+src/pages/                     Dashboard, Zones, Trends, Settings pages
 src/App.css                    All styles + CSS variables
-src/hooks/useOccupancyData.js  Data-access layer (currently polls the fake generators)
+src/hooks/useOccupancyData.js  Data-access layer (currently steps the fake generators)
+src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, OccupancyTrend, ZoneTable, TrafficChart, Insights
@@ -84,7 +87,7 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000. The page updates with new mock data every 2 seconds.
+Open http://localhost:3000. Live counts drift with new mock data every 3 seconds.
 
 ### Other commands
 
