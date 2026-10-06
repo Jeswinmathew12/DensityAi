@@ -1,5 +1,5 @@
 import React from 'react';
-import { getStatus } from '../utils/status';
+import { getZoneStatus } from '../utils/status';
 
 export default function ZoneTable({ zones }) {
   return (
@@ -11,11 +11,11 @@ export default function ZoneTable({ zones }) {
         </thead>
         <tbody>
           {zones.map((z) => {
-            const s = getStatus(z.occupancy, z.capacity);
+            const s = getZoneStatus(z);
             return (
               <tr key={z.id}>
                 <td>{z.name}</td>
-                <td>{z.occupancy}</td>
+                <td>{z.stale ? '-' : z.occupancy}</td>
                 <td>{z.capacity}</td>
                 <td><span className={`badge status-${s.key}`}>{s.label}</span></td>
               </tr>

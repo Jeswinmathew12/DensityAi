@@ -26,6 +26,7 @@ export function generateZones() {
     ...z,
     occupancy: rand(Math.round(z.capacity * 0.2), Math.round(z.capacity * 0.6)),
     lastUpdated: new Date().toISOString(),
+    stale: false, // true when no camera in the zone has reported for 10s (backend only)
   }));
 }
 

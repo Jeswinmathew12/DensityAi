@@ -1,6 +1,7 @@
 import React from 'react';
 import { LayoutDashboard, Users, BarChart3, Settings } from 'lucide-react';
 import useOccupancyData from './hooks/useOccupancyData';
+import { API_URL } from './services/api';
 import useHashRoute from './hooks/useHashRoute';
 import DashboardPage from './pages/DashboardPage';
 import ZonesPage from './pages/ZonesPage';
@@ -33,7 +34,15 @@ export default function App() {
         </nav>
       </aside>
       <main className="content">
-        <Page {...data} />
+        {data.zones.length ? (
+          <Page {...data} />
+        ) : (
+          // Live mode before the backend's first message.
+          <div className="card">
+            <p className="live"><span className="live-dot off" /> Connecting to the backend at {API_URL}…</p>
+            <p className="kpi-sub">Start it with <code>npm run backend</code>.</p>
+          </div>
+        )}
       </main>
     </div>
   );

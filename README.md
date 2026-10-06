@@ -15,7 +15,7 @@ USB camera -> Jetson Orin Nano (PeopleNet + tracker + line-crossing analytics)
            -> SQLite -> FastAPI REST/WebSocket -> React dashboard (this repo)
 ```
 
-The Jetson pipeline and API are planned in [occupancy-tracker-plan.md](occupancy-tracker-plan.md). **There is no backend yet.** The dashboard currently runs on mock data.
+The Jetson pipeline is planned in [occupancy-tracker-plan.md](occupancy-tracker-plan.md). The backend in `backend/` receives counts, cleans them up, stores them and pushes live zone counts to the dashboard. Until the Jetson pipeline is running, `backend/simulator.py` stands in for it. The dashboard can also run on its own with mock data.
 
 ### Milestones
 
@@ -60,16 +60,46 @@ src/index.js                   React bootstrap
 src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
 src/pages/                     Dashboard, Zones, Trends, Settings pages
 src/App.css                    All styles + CSS variables
-src/hooks/useOccupancyData.js  Data-access layer (currently steps the fake generators)
+src/hooks/useOccupancyData.js  Data-access layer: mock generators or live backend
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
+src/services/api.js            Backend URL + WebSocket client
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
+backend/                       FastAPI + SQLite backend, simulator, tests
+jetson/probe_client.py         Sender the DeepStream probe calls on the Jetson
 ```
 
 ### Data
 
-All data comes from `src/utils/fakeDataGenerator.js`. The shapes it returns are the data contract. When the Jetson API exists, only `useOccupancyData.js` should need to change (swap the generators for `fetch` or WebSocket calls).
+The shapes returned by `src/utils/fakeDataGenerator.js` are the data contract, and the backend returns the same shapes. `useOccupancyData.js` is the only file that knows whether data is mock or live.
+
+## Backend
+
+```
+Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLite --/ws/live--> dashboard
+```
+
+- **What the Jetson sends:** numbers only, never images. One JSON object per camera per second, or an array of them:
+  ```json
+  { "cameraId": "cam-1", "ts": 1759500000.0, "sentAt": 1759500000.2,
+    "occupancy": 12, "entriesCum": 140, "exitsCum": 128, "fps": 27.4 }
+  ```
+  `occupancy` is the `nvdsanalytics` ROI count, and `entriesCum`/`exitsCum` are its cumulative line-crossing counts. `ts` is when the frame was counted and `sentAt` is when the request went out. The backend uses the gap to correct for the Jetson's clock being wrong. If `INGEST_TOKEN` is set, requests must send it as `X-Ingest-Token`.
+- **Processing:**
+  - The live count is the median of each camera's last 5 samples, which hides flicker and brief occlusions.
+  - Cameras are combined per zone, using `"fusion": "sum"` (separate areas) or `"max"` (overlapping views) in `backend/zones.json`.
+  - A zone is marked `stale` (shown as "Offline") when its cameras stop reporting for 10 seconds.
+- **Endpoints:**
+  - `GET /api/zones`: live zones, same shape as `generateZones()`
+  - `GET /api/health`: per-camera last-seen time and FPS
+  - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
+- **Configuration:**
+  - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
+  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`)
+  - Frontend: `REACT_APP_API_URL` (default `http://localhost:8000`)
+
+Coming for Demo 2: minute rollups and real history for Trends, traffic, stats and insights, served as part of the same contract.
 
 ## How to run
 
@@ -89,13 +119,30 @@ npm start
 
 Open http://localhost:3000. Live counts drift with new mock data every 3 seconds.
 
+### With the backend (live data)
+
+Needs Python 3.9+. Use three terminals:
+
+```bash
+npm run backend:setup   # once: creates backend/.venv and installs FastAPI etc.
+npm run backend         # terminal 1: API at http://localhost:8000
+npm run simulate        # terminal 2: fake Jetson posting counts every second
+npm run start:live      # terminal 3: dashboard using the backend
+```
+
+Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` fast-forwards a minute per second, and `--dropout 0.02` makes cameras go silent now and then to test the offline state. On Windows, set `REACT_APP_DATA_SOURCE=live` in a `.env.local` file and use `npm start`, since the `start:live` script uses macOS/Linux syntax.
+
 ### Other commands
 
 | Command | What it does |
 |---|---|
-| `npm start` | Dev server at http://localhost:3000 |
+| `npm start` | Dev server at http://localhost:3000 (mock data) |
+| `npm run start:live` | Dev server using the backend |
 | `npm run build` | Production build into `build/` (run this to check for errors) |
 | `npm test` | Run tests |
+| `npm run backend` | Backend at http://localhost:8000, reloads on changes |
+| `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
+| `npm run backend:test` | Backend tests |
 
 ## Contributing
 

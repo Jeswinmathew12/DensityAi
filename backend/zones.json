@@ -1,0 +1,8 @@
+{
+  "zones": [
+    { "id": "zone-a", "name": "Zone A - Main Room", "capacity": 40, "fusion": "sum" }
+  ],
+  "cameras": [
+    { "id": "cam-1", "zoneId": "zone-a" }
+  ]
+}

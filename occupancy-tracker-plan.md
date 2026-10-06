@@ -261,12 +261,13 @@ Keep it boring. In your probe callback:
 
 Two people can build this against a **fake data generator** starting in week 2 — don't block on the pipeline being finished.
 
-**Backend** — FastAPI on the Jetson:
+**Backend** — FastAPI, built in `backend/` (see the README's "Backend" section). The probe doesn't write SQLite directly; it calls `jetson/probe_client.py`, which POSTs counts to the backend without blocking the pipeline:
 ```
-GET  /api/current              → {occupancy, capacity, status, last_updated}
-GET  /api/history?hours=24     → time-series for charts
-GET  /api/stats/daily          → peak hour, avg occupancy, total visitors
-WS   /ws/live                  → push updates every second
+POST /api/ingest               ← probe/simulator, 1 Hz per camera (counts only, no frames)
+GET  /api/zones                → live zones, same shape as the dashboard's mock data
+GET  /api/health               → per-camera last seen + FPS
+WS   /ws/live                  → pushes zone counts when they change
+(Demo 2) /api/trends, /api/traffic, /api/stats/daily, /api/insights from stored history
 ```
 
 **Frontend** — what to actually show:

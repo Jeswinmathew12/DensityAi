@@ -15,12 +15,18 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 - React 18 (Create React App / `react-scripts` 5), plain JavaScript (no TypeScript)
 - Recharts for charts, lucide-react for icons
 - Plain CSS with CSS variables in `src/App.css` (no Tailwind, no CSS-in-JS)
+- Backend: Python 3.9+, FastAPI + uvicorn, SQLite via stdlib `sqlite3` (no ORM). Deps in `backend/requirements.txt`, installed into `backend/.venv`
 
 ## Commands
 - `npm install`: install dependencies
 - `npm start`: dev server at http://localhost:3000
 - `npm run build`: production build (run this to check for errors before finishing a task)
 - `npm test`: run tests
+- `npm run backend:setup`: create `backend/.venv` and install Python deps (once)
+- `npm run backend`: FastAPI backend at http://localhost:8000 (auto-reloads)
+- `npm run simulate`: fake Jetson that posts counts to the backend (`-- --help` for flags)
+- `npm run start:live`: dev server using the backend instead of mock data
+- `npm run backend:test`: backend tests (run these too before finishing backend work)
 
 ## Project structure
 ```
@@ -29,17 +35,26 @@ src/index.js                   React bootstrap
 src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
 src/pages/                     Dashboard, Zones, Trends, Settings pages
 src/App.css                    All styles + CSS variables
-src/hooks/useOccupancyData.js  Data-access layer (currently steps the fake generators)
+src/hooks/useOccupancyData.js  Data-access layer: mock generators or live backend (REACT_APP_DATA_SOURCE)
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
+src/services/api.js            Backend URL + WebSocket client (only used by useOccupancyData)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
+backend/app/main.py            FastAPI app: /api/ingest, /api/zones, /api/health, /ws/live
+backend/app/processing.py      Pure logic: smoothing, multi-camera fusion, staleness, clock correction
+backend/app/db.py              SQLite schema + writes
+backend/zones.json             Zones (capacity, fusion) and which camera belongs to which zone
+backend/simulator.py           Fake Jetson for development
+jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson
 ```
 
 ## Data
-- All data currently comes from `src/utils/fakeDataGenerator.js`. There is no backend yet.
-- Treat the shapes returned by the generator functions as the **data contract**. When adding a feature, add or extend a generator function rather than hardcoding data in components.
-- Later, generators will be swapped for real API/WebSocket calls from the Jetson pipeline, so keep data fetching isolated from rendering (e.g., a hook or service layer), not scattered through components.
+- `npm start` uses mock data from `src/utils/fakeDataGenerator.js`. `npm run start:live` takes live zone counts from the backend over `/ws/live`; trends, traffic, stats and insights are still mock until the backend serves history (Phase 2).
+- Treat the shapes returned by the generator functions as the **data contract**. The backend must return the same shapes (tests in `backend/tests/test_api.py` check the zone keys). When adding a feature, extend the generator and the backend together rather than hardcoding data in components.
+- Keep data fetching isolated from rendering: only `useOccupancyData` talks to `src/services/api.js`; components just receive props.
+- The backend sends counts and capacity, never a status. Busy/Available logic stays in `src/utils/status.js`.
+- The Jetson sends aggregated counts only (never frames). The ingest payload and API are documented in the README's "Backend" section; the Jetson pipeline setup is in `occupancy-tracker-plan.md`.
 
 ## Design guidelines
 - Light theme, left sidebar nav, card-based layout. Visual references: "Occupancy Insight" style dashboards (KPI cards on top, trend chart + zone table, bidirectional in/out traffic chart, insights panel).
@@ -52,7 +67,7 @@ src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, Zon
 - Put new dashboard sections in their own file under `src/components/` rather than growing `App.jsx`.
 - Ask before adding new npm dependencies.
 - Keep the app runnable with `npm start` after every change.
-- Never commit secrets, API keys, or `.env` files.
+- Never commit secrets, API keys, or `.env` files. The ingest token comes from the `INGEST_TOKEN` env var.
 
 ## Working style
 - Make small, focused changes and explain what changed and why.

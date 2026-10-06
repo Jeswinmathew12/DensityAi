@@ -1,8 +1,11 @@
 import React from 'react';
 import { THRESHOLDS } from '../utils/status';
+import { API_URL } from '../services/api';
+
+const CONNECTION_TEXT = { open: 'connected', connecting: 'connecting…', offline: 'disconnected, retrying…' };
 
 // Read-only for now: thresholds live in src/utils/status.js and zones come from the data source.
-export default function SettingsPage({ zones }) {
+export default function SettingsPage({ zones, source, connection }) {
   return (
     <>
       <h1>Settings</h1>
@@ -28,7 +31,16 @@ export default function SettingsPage({ zones }) {
         </div>
         <div className="card">
           <h2>Data source</h2>
-          <p className="kpi-sub">Simulated data. Live Jetson feed not connected yet.</p>
+          {source === 'live' ? (
+            <p className="kpi-sub">
+              Live counts from the backend at {API_URL} ({CONNECTION_TEXT[connection]}).
+              Trends, traffic and insights are still simulated.
+            </p>
+          ) : (
+            <p className="kpi-sub">
+              Simulated data. Run <code>npm run start:live</code> to use the backend instead.
+            </p>
+          )}
         </div>
       </div>
     </>
