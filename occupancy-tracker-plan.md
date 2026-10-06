@@ -2,6 +2,8 @@
 
 Reference repo: `NVIDIA-AI-IOT/deepstream-occupancy-analytics` — good for *logic*, outdated for *setup*. This plan replaces its install steps with current ones and adds the dashboard layer.
 
+> **Up-to-date setup steps live in [docs/jetson-setup.md](docs/jetson-setup.md).** That runbook reflects what was actually run on our Jetson (JetPack 6.2.1, DeepStream 7.1, `copy-hw=2`, power mode, clock and network fixes). This plan keeps the background and design reasoning. Where the two disagree, trust the runbook.
+
 ---
 
 ## Target architecture
@@ -34,7 +36,7 @@ Logitech C920 (USB, MJPEG/H264)
 
 | Decision | Recommendation | Why |
 |---|---|---|
-| JetPack version | **6.2** (Ubuntu 22.04) | DeepStream 7.1 pairs with it; most forum answers/tutorials target this. JetPack 7.x is newer but thinly documented for third-party samples. |
+| JetPack version | **6.2.1** (L4T R36.4.4, Ubuntu 22.04) | DeepStream 7.1 officially targets JetPack 6.1 but works on 6.2.x with the `copy-hw=2` fix (see Known traps). Most forum answers/tutorials target 6.x. JetPack 7.x is newer but thinly documented for third-party samples. |
 | DeepStream | **7.1** | Stable, has `nvdsanalytics`, ONNX-native `nvinfer`. |
 | Language | **Python** (`deepstream_python_apps` / `pyds`) | The NVIDIA repo is C. Python cuts your integration time massively and makes the dashboard hookup trivial. Performance is fine — inference still runs in TensorRT. |
 | Model | **PeopleNet `deployable_quantized_onnx_v2.6.3`** | ONNX, not the legacy `.etlt`. No `tlt-converter`, no model key. |
@@ -45,28 +47,31 @@ Logitech C920 (USB, MJPEG/H264)
 
 ## Phase 1 — Flash the Jetson (Days 1–3)
 
+**Check first:** run `cat /etc/nv_tegra_release`. If it already reports R36 revision 4.x (JetPack 6.2.x) and `df -h /` shows the root filesystem on the NVMe (`/dev/nvme0n1p1`), **skip flashing**. Our dev kit came pre-flashed. Otherwise:
+
 The Orin Nano Dev Kit no longer has an SD-card image. You flash via USB.
 
 1. **Hardware you need:** the dev kit, 19V barrel power supply, USB-C cable (for flashing), a USB flash drive ≥16GB, an NVMe SSD (**strongly recommended** — 256GB+; DeepStream + models + engine files will fill microSD fast), monitor/keyboard/mouse, Ethernet.
-2. Download the **unified JetPack 6.2 ISO** from NVIDIA's JetPack downloads page. Write it to the USB stick (`balenaEtcher` or `dd`).
+2. Download the **unified JetPack 6.2.1 ISO** from NVIDIA's JetPack downloads page. Write it to the USB stick (`balenaEtcher` or `dd`).
 3. Follow NVIDIA's **Jetson Orin Nano Developer Kit Getting Started Guide** for the USB-boot flashing procedure. Install to the NVMe, not the SD card.
 4. On first boot, complete Ubuntu setup, then:
    ```bash
    sudo apt update && sudo apt upgrade -y
    sudo apt install nvidia-jetpack -y
    ```
-5. **Enable Super Mode / MAXN power profile** — big free performance win:
+5. **Set the power mode.** List the modes with `grep "POWER_MODEL ID" /etc/nvpmodel.conf`. On this board: `0`=15W, `1`=25W, `2`=MAXN_SUPER, `3`=7W. We run 25W and do **not** run `jetson_clocks`:
    ```bash
-   sudo nvpmodel -m 0        # MAXN
-   sudo jetson_clocks
+   sudo nvpmodel -m 1        # 25W
+   sudo nvpmodel -q          # confirm
    ```
+   A "System throttled due to over-current" popup still appears now and then at 25W. It is harmless board protection. Use 15W (`-m 0`) on demo day if the popup is distracting. MAXN_SUPER and `jetson_clocks` make it much more frequent. (An earlier version of this plan said `nvpmodel -m 0  # MAXN`. That is wrong: mode 0 is 15W.)
 6. Verify:
    ```bash
    sudo apt install python3-pip -y && sudo pip3 install jetson-stats
    jtop        # confirm JetPack version, CUDA, TensorRT all present
    ```
 
-**Checkpoint:** `jtop` shows JetPack 6.2, CUDA 12.6, TensorRT 10.x.
+**Checkpoint:** `jtop` shows JetPack 6.2.1, CUDA 12.6, TensorRT 10.x.
 
 ---
 
@@ -80,13 +85,14 @@ Two options — pick one and have the whole team use the same:
 sudo apt install -y libssl3 libssl-dev libgstreamer1.0-0 gstreamer1.0-tools \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
   gstreamer1.0-libav libgstreamer-plugins-base1.0-dev libgstrtspserver-1.0-dev \
-  libjansson4 libyaml-cpp-dev libjsoncpp-dev protobuf-compiler gcc make git python3
+  libjansson4 libyaml-cpp-dev libjsoncpp-dev protobuf-compiler gcc make git python3 v4l-utils
 
 # Download the DeepStream 7.1 Jetson .deb from NVIDIA (developer.nvidia.com/deepstream-getting-started)
 sudo apt install ./deepstream-7.1_*_arm64.deb
 ```
+If `apt-cache policy deepstream-7.1` already shows a 7.1 candidate, `sudo apt install -y deepstream-7.1` is enough. Verify with `deepstream-app --version-all`.
 
-**Option B — Docker** (`nvcr.io/nvidia/deepstream:7.1-samples-multiarch`) — cleanest, but USB camera and display passthrough add friction.
+**Option B — Docker** (`nvcr.io/nvidia/deepstream:7.1-samples-multiarch`) — **do not use on JetPack 6.2.1.** The container has a GPU driver version mismatch there. Even on other versions, USB camera and display passthrough add friction.
 
 **Verify the install with a stock sample before touching your own code:**
 ```bash
@@ -108,29 +114,28 @@ First run builds a TensorRT engine and takes several minutes. If you see boundin
    ```
    Use **MJPEG 1280x720 @30fps** — the C920's raw YUYV mode caps at ~10fps at 720p.
 
-2. **Download PeopleNet (ONNX):**
+2. **Download PeopleNet (ONNX):** `bash jetson/setup_peoplenet.sh` downloads it into `~/models/peoplenet` and writes the config below with your `$HOME` paths. The manual equivalent:
    ```bash
    mkdir -p ~/models/peoplenet && cd ~/models/peoplenet
-   # Via NGC CLI:
-   ngc registry model download-version \
-     "nvidia/tao/peoplenet:deployable_quantized_onnx_v2.6.3"
-   # Or download the .onnx, labels.txt, and int8 calib cache directly from the
-   # NGC catalog page for peoplenet.
+   wget --content-disposition 'https://api.ngc.nvidia.com/v2/models/nvidia/tao/peoplenet/versions/deployable_quantized_onnx_v2.6.3/zip' -O peoplenet.zip && unzip peoplenet.zip
    ```
+   The zip contains `resnet34_peoplenet.onnx` (the model), `resnet34_peoplenet_int8.txt` (INT8 calibration cache), `labels.txt` and a sample `nvinfer_config.txt` that we don't use.
 
 3. **Write `config_infer_peoplenet.txt`** — this is where the old repo's config will mislead you. Modern form:
    ```ini
    [property]
    gpu-id=0
    net-scale-factor=0.0039215697906911373
-   onnx-file=/home/<user>/models/peoplenet/resnet34_peoplenet_int8.onnx
+   onnx-file=/home/<user>/models/peoplenet/resnet34_peoplenet.onnx
    int8-calib-file=/home/<user>/models/peoplenet/resnet34_peoplenet_int8.txt
-   model-engine-file=/home/<user>/models/peoplenet/peoplenet_b1_gpu0_int8.engine
+   model-engine-file=/home/<user>/models/peoplenet/resnet34_peoplenet.onnx_b1_gpu0_int8.engine
    labelfile-path=/home/<user>/models/peoplenet/labels.txt
    infer-dims=3;544;960
    batch-size=1
-   network-mode=1          ; 0=FP32 1=INT8 2=FP16
-   num-detected-classes=3  ; person, bag, face
+   # 0=FP32 1=INT8 2=FP16
+   network-mode=1
+   # classes: person, bag, face
+   num-detected-classes=3
    interval=0
    gie-unique-id=1
    cluster-mode=2
@@ -141,7 +146,7 @@ First run builds a TensorRT engine and takes several minutes. If you see boundin
    topk=20
    nms-iou-threshold=0.5
 
-   ; Ignore bags (class 1) and faces (class 2) — count people only
+   # ignore bags (class 1) and faces (class 2), count people only
    [class-attrs-1]
    pre-cluster-threshold=1.1
    [class-attrs-2]
@@ -149,15 +154,18 @@ First run builds a TensorRT engine and takes several minutes. If you see boundin
    ```
    **Deleted vs. the old repo:** `tlt-model-key`, `tlt-encoded-model`. Those are dead. If you copy their config verbatim it will not build.
 
+   **Two rules for this file:** comments must start with `#` (trap 8), and `model-engine-file` must be exactly `<onnx path>_b1_gpu0_int8.engine` (the name DeepStream saves under), or the engine rebuilds on every run. If the INT8 build ever fails, use `network-mode=2` and an `_fp16.engine` name.
+
 4. **Smoke test with gst-launch** before writing any app code:
    ```bash
    gst-launch-1.0 v4l2src device=/dev/video0 ! \
      image/jpeg,width=1280,height=720,framerate=30/1 ! jpegdec ! videoconvert ! \
-     nvvideoconvert ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+     nvvideoconvert copy-hw=2 ! 'video/x-raw(memory:NVMM),format=NV12' ! \
      m.sink_0 nvstreammux name=m batch-size=1 width=1280 height=720 live-source=1 ! \
-     nvinfer config-file-path=./config_infer_peoplenet.txt ! \
-     nvvideoconvert ! nvdsosd ! nv3dsink
+     nvinfer config-file-path=$HOME/models/peoplenet/config_infer_peoplenet.txt ! \
+     nvvideoconvert copy-hw=2 ! nvdsosd ! nv3dsink sync=false
    ```
+   `copy-hw=2` is **required** on every `nvvideoconvert` (trap 7). Use the same in your Python pipeline.
 
 **Checkpoint:** boxes around people, live, from your webcam. Note your FPS — aim for 25–30.
 
@@ -323,6 +331,13 @@ A and B pair heavily early; C and D work in parallel on fake data. Everyone conv
 4. **Coordinates are resolution-specific.** `config-width`/`config-height` in the analytics config must match the streammux resolution, or your lines land in the wrong place.
 5. **Counting a crowd exiting at once.** People occlude each other at a doorway. Your accuracy number will be lower for groups than for individuals — measure both and report honestly. It's a better report than pretending it's perfect.
 6. **Don't add Kafka.** The reference repo uses it for a multi-building deployment. You have one camera and one room.
+7. **Crash after about 2 minutes (`Failed in mem copy`).** DeepStream 7.1 on JetPack 6.2.x dies with `nvbufsurftransform_copy.cpp:341: => Failed in mem copy`, then a cascade of `cudaErrorIllegalAddress (700)`. Known NVIDIA issue (DeepStream SDK FAQ #51: https://forums.developer.nvidia.com/t/deepstream-sdk-faq/80236/61). Fix: `copy-hw=2` on **every** `nvvideoconvert` (`nvvideoconvert copy-hw=2` in gst-launch, `conv.set_property("copy-hw", 2)` in Python). Verified stable. Fallbacks if it returns: hardware MJPEG decode (`nvv4l2decoder mjpeg=1` instead of `jpegdec ! videoconvert`), or reflash to JetPack 6.1.
+8. **`;` comments in DeepStream configs.** nvinfer and nvdsanalytics configs are GLib key files. Comment lines must start with `#`. Lines starting with `;` and inline `; ...` comments break parsing.
+9. **Clock resets to 1970.** The Jetson has no RTC battery, and `ncsu-guest` blocks NTP, so `apt`, `git` and `pip` fail with "not valid yet" errors. Set it once with `sudo date -s "$(curl -sI https://www.google.com | grep -i '^date:' | cut -d' ' -f2- | tr -d '\r')"`, then `sudo apt install -y htpdate`. With no network at all, `sudo date -s "YYYY-MM-DD HH:MM"`.
+10. **`ncsu-guest` quirks.** Accept the terms page in a browser first. Ping is blocked, so test with `curl -sI https://www.google.com | head -1`. Laptop-to-Jetson traffic is likely blocked, so use a phone hotspot. Long term, register the Jetson's MAC (`cat /sys/class/net/wlP1p1s0/address`) on the `ncsu` (Nomad) network.
+11. **Never accept an Ubuntu release upgrade (22.04 to 24.04).** It breaks JetPack and requires a reflash.
+
+See [docs/jetson-setup.md](docs/jetson-setup.md#known-issues) for symptoms, causes and fixes in full.
 
 ---
 

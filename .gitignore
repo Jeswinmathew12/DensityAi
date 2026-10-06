@@ -10,3 +10,8 @@ backend/.venv/
 backend/*.db
 __pycache__/
 .pytest_cache/
+
+# Jetson model artifacts (device-specific or large; rebuilt by jetson/setup_peoplenet.sh)
+*.engine
+*.onnx
+peoplenet*.zip

@@ -48,7 +48,9 @@ backend/zones.json             Zones (capacity, fusion) and which camera belongs
 backend/simulator.py           Fake Jetson for development
 jetson/occupancy_pipeline.py   DeepStream 7.1 app: USB camera -> PeopleNet -> nvdsanalytics ROI count -> probe_client
 jetson/config_nvdsanalytics.txt ROI + line-crossing config (line crossing off for Demo 1)
+jetson/setup_peoplenet.sh      Downloads PeopleNet and writes config_infer_peoplenet.txt (idempotent)
 jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson
+docs/jetson-setup.md           From-scratch Jetson runbook + known issues (source of truth for the Jetson)
 ```
 
 ## Data
@@ -56,7 +58,7 @@ jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on
 - Treat the shapes returned by the generator functions as the **data contract**. The backend must return the same shapes (tests in `backend/tests/test_api.py` check the zone keys). When adding a feature, extend the generator and the backend together rather than hardcoding data in components.
 - Keep data fetching isolated from rendering: only `useOccupancyData` talks to `src/services/api.js`; components just receive props.
 - The backend sends counts and capacity, never a status. Busy/Available logic stays in `src/utils/status.js`.
-- The Jetson sends aggregated counts only (never frames). The ingest payload and API are documented in the README's "Backend" section; the Jetson pipeline setup is in `occupancy-tracker-plan.md`.
+- The Jetson sends aggregated counts only (never frames). The ingest payload and API are documented in the README's "Backend" section; the Jetson setup runbook is `docs/jetson-setup.md` (`occupancy-tracker-plan.md` has the background).
 
 ## Design guidelines
 - Light theme, left sidebar nav, card-based layout. Visual references: "Occupancy Insight" style dashboards (KPI cards on top, trend chart + zone table, bidirectional in/out traffic chart, insights panel).
@@ -69,6 +71,9 @@ jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on
 - Put new dashboard sections in their own file under `src/components/` rather than growing `App.jsx`.
 - Ask before adding new npm dependencies.
 - Keep the app runnable with `npm start` after every change.
+- Every `nvvideoconvert` in DeepStream code needs `copy-hw=2` (DeepStream 7.1 on JetPack 6.2.x crashes after ~2 minutes without it).
+- DeepStream config files (nvinfer, nvdsanalytics) use `#` comments only; `;` comments break parsing.
+- `jetson/occupancy_pipeline.py` runs with the system `python3` (where `pyds` and `gi` are installed), not `backend/.venv`.
 - Never commit secrets, API keys, or `.env` files. The ingest token comes from the `INGEST_TOKEN` env var.
 
 ## Working style

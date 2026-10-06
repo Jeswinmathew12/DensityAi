@@ -11,7 +11,7 @@ The main goal of the UI is to answer **"how busy is it right now?"** at a glance
 ### System overview
 
 ```
-USB camera -> Jetson Orin Nano (PeopleNet + tracker + line-crossing analytics)
+USB camera -> Jetson Orin Nano, JetPack 6.2.1 + DeepStream 7.1 (PeopleNet + tracker + line-crossing analytics)
            -> SQLite -> FastAPI REST/WebSocket -> React dashboard (this repo)
 ```
 
@@ -67,6 +67,8 @@ src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
 backend/                       FastAPI + SQLite backend, simulator, tests
+docs/jetson-setup.md           Jetson setup runbook and known issues
+jetson/setup_peoplenet.sh      Downloads PeopleNet and writes its nvinfer config
 jetson/occupancy_pipeline.py   DeepStream pipeline: camera -> PeopleNet -> ROI count -> backend
 jetson/config_nvdsanalytics.txt ROI and line-crossing config for the pipeline
 jetson/probe_client.py         Sender the DeepStream probe calls on the Jetson
@@ -150,7 +152,7 @@ Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` 
 
 `jetson/occupancy_pipeline.py` reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend through `jetson/probe_client.py`. Only counts leave the Jetson, never frames.
 
-It needs JetPack 6.2, DeepStream 7.1 and pyds 1.2.0, and it runs with the **system `python3`** (where `pyds` and `gi` are installed), not `backend/.venv`. Setup steps are in [occupancy-tracker-plan.md](occupancy-tracker-plan.md).
+It needs JetPack 6.2.1, DeepStream 7.1 and pyds 1.2.0, and it runs with the **system `python3`** (where `pyds` and `gi` are installed), not `backend/.venv`. To rebuild the Jetson from scratch, follow [docs/jetson-setup.md](docs/jetson-setup.md). It covers the install steps, PeopleNet setup and the known issues. [occupancy-tracker-plan.md](occupancy-tracker-plan.md) has the background.
 
 ```bash
 # On the Jetson, from the repo root
