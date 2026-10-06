@@ -148,20 +148,44 @@ Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` 
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
 | `npm run backend:test` | Backend tests |
 
-## Running on the Jetson
+## How to run on the Jetson
 
-`jetson/occupancy_pipeline.py` reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend through `jetson/probe_client.py`. Only counts leave the Jetson, never frames.
+The Jetson already has everything installed. To rebuild one from scratch, follow [docs/jetson-setup.md](docs/jetson-setup.md).
 
-It needs JetPack 6.2.1, DeepStream 7.1 and pyds 1.2.0, and it runs with the **system `python3`** (where `pyds` and `gi` are installed), not `backend/.venv`. To rebuild the Jetson from scratch, follow [docs/jetson-setup.md](docs/jetson-setup.md). It covers the install steps, PeopleNet setup and the known issues. [occupancy-tracker-plan.md](occupancy-tracker-plan.md) has the background.
+Run each command in its own terminal on the Jetson, in this order.
+
+**1. Backend**
 
 ```bash
-# On the Jetson, from the repo root
-export DENSITY_API_URL=http://localhost:8000   # where the backend runs (default shown)
-export INGEST_TOKEN=...                        # only if the backend has one set
-python3 jetson/occupancy_pipeline.py
+cd ~/DensityAi
+backend/.venv/bin/uvicorn backend.app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-The terminal prints the ROI count and FPS about once a second. Ctrl+C stops the pipeline cleanly. The first run builds a TensorRT engine, which can take several minutes and looks like a hang.
+**2. Frontend**, which opens at http://localhost:3000 in the Jetson's browser
+
+```bash
+cd ~/DensityAi
+npm run start:live
+```
+
+**3. Video pipeline**
+
+```bash
+cd ~/DensityAi/jetson
+python3 occupancy_pipeline.py
+```
+
+The pipeline reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend. Only counts leave the Jetson, never frames. It prints the count and FPS about once a second, and Ctrl+C stops it cleanly. It runs with the system `python3`, where `pyds` and `gi` are installed, not `backend/.venv`.
+
+**Don't run `simulator.py` at the same time.** It and the pipeline both post as `cam-1`, so their counts would get mixed together on the dashboard.
+
+**To view the dashboard from a laptop instead,** run step 2 on the laptop with:
+
+```bash
+REACT_APP_API_URL=http://<jetson-ip>:8000 npm run start:live
+```
+
+### Pipeline options
 
 | Option | Default | What it does |
 |---|---|---|
@@ -172,10 +196,10 @@ The terminal prints the ROI count and FPS about once a second. Ctrl+C stops the 
 | `--tracker` | off | Adds `nvtracker`. Needed before enabling line crossing. |
 | `--no-display` | off | Uses `fakesink` instead of a window, for SSH or systemd runs |
 
+The pipeline sends to `http://localhost:8000` by default. Set `DENSITY_API_URL` to change that, and `INGEST_TOKEN` if the backend has one set.
+
 - **Demo 1 is ROI-only.** Line crossing is disabled (`enable=0`) in `config_nvdsanalytics.txt`, so entries and exits are sent as 0. Turn it on and run with `--tracker` for Demo 2.
 - **Coordinates are scene-specific.** The ROI covers the whole frame for now. Re-derive it from a screenshot once the camera is mounted. `config-width` and `config-height` must stay equal to the 1280x720 stream resolution.
-- **Don't run the simulator at the same time.** Both would post as `cam-1`.
-- **Every `nvvideoconvert` has `copy-hw=2`.** Without it, DeepStream 7.1 on JetPack 6.2 crashes after about two minutes with "Failed in mem copy".
 
 ## Contributing
 
