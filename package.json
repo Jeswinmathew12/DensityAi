@@ -1,0 +1,27 @@
+{
+  "name": "densityai-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "lucide-react": "^0.400.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.15.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "start:live": "REACT_APP_DATA_SOURCE=live react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "backend:setup": "python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements-dev.txt",
+    "backend": "backend/.venv/bin/uvicorn backend.app.main:create_app --factory --reload --reload-dir backend --port 8000",
+    "backend:test": "backend/.venv/bin/python -m pytest backend/tests",
+    "simulate": "backend/.venv/bin/python backend/simulator.py"
+  },
+  "eslintConfig": { "extends": ["react-app"] },
+  "browserslist": {
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+  }
+}

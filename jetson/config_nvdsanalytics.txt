@@ -1,0 +1,37 @@
+# nvdsanalytics config for DensityAI (Demo 1: ROI occupancy only).
+# Only "#" comments here: DeepStream's config parser rejects ";" comments.
+#
+# config-width/height MUST match the nvstreammux width/height in
+# occupancy_pipeline.py (1280x720), or the ROI and lines land in the wrong place.
+# Coordinates are scene-specific: after mounting the camera, re-derive them from a
+# screenshot of its view.
+
+[property]
+enable=1
+config-width=1280
+config-height=720
+osd-mode=2
+display-font-size=12
+
+# Occupancy: how many people are inside the room region.
+# The group name "RoomArea" is what occupancy_pipeline.py reads from objInROIcnt.
+[roi-filtering-stream-0]
+enable=1
+roi-RoomArea=50;50;1230;50;1230;670;50;670
+inverse-roi=0
+class-id=0
+
+# Entry/exit: a line across the doorway. DISABLED for Demo 1.
+# Line crossing needs persistent object IDs, so run the pipeline with --tracker
+# before turning this on.
+# Format: line-crossing-<label>=dir-x1;dir-y1;dir-x2;dir-y2;line-x1;line-y1;line-x2;line-y2
+# The first coordinate pair is a direction vector (which way counts as a crossing),
+# the second pair is the line segment. Entry and Exit are the same line with the
+# direction vectors reversed.
+[line-crossing-stream-0]
+enable=0
+line-crossing-Entry=580;400;620;700;450;500;790;500
+line-crossing-Exit=620;700;580;400;450;500;790;500
+class-id=0
+extended=0
+mode=loose
