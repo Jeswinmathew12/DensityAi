@@ -67,6 +67,8 @@ src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
 backend/                       FastAPI + SQLite backend, simulator, tests
+jetson/occupancy_pipeline.py   DeepStream pipeline: camera -> PeopleNet -> ROI count -> backend
+jetson/config_nvdsanalytics.txt ROI and line-crossing config for the pipeline
 jetson/probe_client.py         Sender the DeepStream probe calls on the Jetson
 ```
 
@@ -143,6 +145,35 @@ Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` 
 | `npm run backend` | Backend at http://localhost:8000, reloads on changes |
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
 | `npm run backend:test` | Backend tests |
+
+## Running on the Jetson
+
+`jetson/occupancy_pipeline.py` reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend through `jetson/probe_client.py`. Only counts leave the Jetson, never frames.
+
+It needs JetPack 6.2, DeepStream 7.1 and pyds 1.2.0, and it runs with the **system `python3`** (where `pyds` and `gi` are installed), not `backend/.venv`. Setup steps are in [occupancy-tracker-plan.md](occupancy-tracker-plan.md).
+
+```bash
+# On the Jetson, from the repo root
+export DENSITY_API_URL=http://localhost:8000   # where the backend runs (default shown)
+export INGEST_TOKEN=...                        # only if the backend has one set
+python3 jetson/occupancy_pipeline.py
+```
+
+The terminal prints the ROI count and FPS about once a second. Ctrl+C stops the pipeline cleanly. The first run builds a TensorRT engine, which can take several minutes and looks like a hang.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--camera-id` | `cam-1` | Camera name sent to the backend. It must be listed in `backend/zones.json`. |
+| `--device` | `/dev/video0` | V4L2 camera device |
+| `--infer-config` | `~/models/peoplenet/config_infer_peoplenet.txt` | PeopleNet `nvinfer` config |
+| `--analytics-config` | `jetson/config_nvdsanalytics.txt` | ROI and line-crossing config |
+| `--tracker` | off | Adds `nvtracker`. Needed before enabling line crossing. |
+| `--no-display` | off | Uses `fakesink` instead of a window, for SSH or systemd runs |
+
+- **Demo 1 is ROI-only.** Line crossing is disabled (`enable=0`) in `config_nvdsanalytics.txt`, so entries and exits are sent as 0. Turn it on and run with `--tracker` for Demo 2.
+- **Coordinates are scene-specific.** The ROI covers the whole frame for now. Re-derive it from a screenshot once the camera is mounted. `config-width` and `config-height` must stay equal to the 1280x720 stream resolution.
+- **Don't run the simulator at the same time.** Both would post as `cam-1`.
+- **Every `nvvideoconvert` has `copy-hw=2`.** Without it, DeepStream 7.1 on JetPack 6.2 crashes after about two minutes with "Failed in mem copy".
 
 ## Contributing
 
