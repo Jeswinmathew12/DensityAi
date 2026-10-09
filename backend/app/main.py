@@ -11,12 +11,14 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, Union
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, history
 from .processing import STALE_AFTER_S, LiveState, correct_ts
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -35,12 +37,15 @@ class Sample(BaseModel):
     fps: Optional[float] = None
 
 
-def create_app(db_path=None, zones_path=None, ingest_token=None):
+def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None):
     db_path = db_path or os.environ.get("DENSITY_DB") or BACKEND_DIR / "density.db"
     zones_path = zones_path or BACKEND_DIR / "zones.json"
     ingest_token = ingest_token or os.environ.get("INGEST_TOKEN")
+    # History is grouped into the room's local hours, not UTC.
+    tz = ZoneInfo(tz or os.environ.get("DENSITY_TZ") or "America/New_York")
 
-    state = LiveState(json.loads(Path(zones_path).read_text()))
+    config = json.loads(Path(zones_path).read_text())
+    state = LiveState(config)
     conn = db.connect(str(db_path))
     clients = set()
 
@@ -110,9 +115,18 @@ def create_app(db_path=None, zones_path=None, ingest_token=None):
     async def zones():
         return state.zones_snapshot(time.time())
 
+    @app.get("/api/history")
+    async def get_history():
+        return history.build(conn, config, time.time(), tz)
+
     @app.get("/api/health")
     async def health():
-        return {"cameras": state.cameras_snapshot(time.time()), "dashboards": len(clients)}
+        return {
+            "cameras": state.cameras_snapshot(time.time()),
+            "dashboards": len(clients),
+            # Lets the simulator and reset script see which history this backend is writing.
+            "database": Path(db_path).name,
+        }
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
@@ -126,5 +140,11 @@ def create_app(db_path=None, zones_path=None, ingest_token=None):
             pass
         finally:
             clients.discard(ws)
+
+    # Serve the built dashboard (`npm run build:live`) from the same port, so any device that
+    # can reach the backend can open it. Mounted last so /api and /ws take priority.
+    build_dir = Path(os.environ.get("DENSITY_STATIC") or BACKEND_DIR.parent / "build")
+    if build_dir.is_dir():
+        app.mount("/", StaticFiles(directory=build_dir, html=True), name="dashboard")
 
     return app

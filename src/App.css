@@ -160,6 +160,7 @@ body {
 .zone-num { font-family: var(--font-display); font-weight: 700; font-size: 64px; line-height: 0.9; letter-spacing: -0.04em; }
 .zone-meta { margin: 14px 0 0; }
 .kpi-sub { color: var(--text-muted); font-size: 14px; }
+.chart-empty { height: 240px; margin: 0; display: grid; place-items: center; color: var(--text-muted); font-size: 14px; text-align: center; }
 .status-available-text { color: var(--green); }
 .status-moderate-text { color: var(--blue); }
 .status-busy-text { color: var(--red); }

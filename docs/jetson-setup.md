@@ -295,6 +295,12 @@ Open `http://localhost:3000` in a browser **on the Jetson**. The backend's CORS 
 
 **Success:** the dashboard shows Zone A with a live count that follows the camera.
 
+## Step 11: One command and start at boot
+
+`npm run serve` runs the backend (port 8000, all devices) and the pipeline together, and restarts the pipeline when it stops. `sudo jetson/install-service.sh` makes that start at boot as the `densityai` systemd service. See "How to run on the Jetson" in the README for the details.
+
+**Success:** after a reboot, `journalctl -u densityai -f` shows `[start] Dashboard: http://...` and pipeline output, and the dashboard opens from a laptop on the same network.
+
 ## Debugging with gst-launch
 
 If the Python app misbehaves, run the same chain without any Python. It tells you whether the problem is the camera, the model or the app.

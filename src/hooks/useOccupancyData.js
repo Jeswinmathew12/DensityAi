@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   generateZones,
   stepZones,
@@ -7,7 +7,7 @@ import {
   generateDailyStats,
   generateInsights,
 } from '../utils/fakeDataGenerator';
-import { openLiveSocket } from '../services/api';
+import { fetchHistory, openLiveSocket } from '../services/api';
 
 // Set REACT_APP_DATA_SOURCE=live (e.g. `npm run start:live`) to use the backend.
 export const DATA_SOURCE = process.env.REACT_APP_DATA_SOURCE === 'live' ? 'live' : 'mock';
@@ -37,11 +37,21 @@ function useMockData(intervalMs = 3000) {
   return { ...data, source: 'mock', connection: 'open' };
 }
 
-// Live: zone counts pushed from the backend over a WebSocket. zones stays empty until
-// the first message arrives. History is still simulated until the backend serves it (Phase 2).
+// What live mode shows before the first history response: no data, never made-up data.
+const EMPTY_HISTORY = {
+  trends: {},
+  traffic: [],
+  stats: { peakHour: null, avgOccupancy: null, totalVisitors: null },
+  insights: [],
+};
+const HISTORY_REFRESH_MS = 60000;
+
+// Live: zone counts pushed from the backend over a WebSocket (zones stays empty until the
+// first message), and history fetched from /api/history once a minute.
 function useLiveData() {
   const [zones, setZones] = useState([]);
   const [connection, setConnection] = useState('connecting');
+  const [history, setHistory] = useState(EMPTY_HISTORY);
 
   useEffect(
     () =>
@@ -52,8 +62,22 @@ function useLiveData() {
     []
   );
 
-  const zoneIds = zones.map((z) => z.id).join(',');
-  const history = useMemo(() => mockHistory(zoneIds ? zoneIds.split(',') : []), [zoneIds]);
+  // Load on every (re)connect, then refresh while connected. A failed fetch keeps the last
+  // good history; the live label already shows when the backend is unreachable.
+  useEffect(() => {
+    if (connection !== 'open') return undefined;
+    let cancelled = false;
+    const load = () =>
+      fetchHistory()
+        .then((h) => !cancelled && setHistory(h))
+        .catch(() => {});
+    load();
+    const id = setInterval(load, HISTORY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [connection]);
 
   return { zones, ...history, source: 'live', connection };
 }

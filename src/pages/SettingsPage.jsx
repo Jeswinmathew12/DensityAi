@@ -34,7 +34,7 @@ export default function SettingsPage({ zones, source, connection }) {
           {source === 'live' ? (
             <p className="kpi-sub">
               Live counts from the backend at {API_URL} ({CONNECTION_TEXT[connection]}).
-              Trends, traffic and insights are still simulated.
+              Trends, traffic and insights come from the history stored on the backend.
             </p>
           ) : (
             <p className="kpi-sub">

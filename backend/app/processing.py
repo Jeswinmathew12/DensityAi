@@ -67,6 +67,9 @@ class LiveState:
         self.fps = {}
 
     def add(self, camera_id, occupancy, received_at, fps=None):
+        # After an outage, start the median fresh so counts from before it don't leak in.
+        if self.camera_stale(camera_id, received_at):
+            self.recent[camera_id].clear()
         self.recent[camera_id].append(occupancy)
         self.last_seen[camera_id] = received_at
         if fps is not None:

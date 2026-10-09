@@ -61,3 +61,14 @@ def test_zone_goes_stale_after_ten_seconds():
     s.add("a2", 3, received_at=100)
     assert not s.zones_snapshot(now=110)[0]["stale"]
     assert s.zones_snapshot(now=111)[0]["stale"]
+
+
+def test_camera_back_from_outage_does_not_reuse_old_counts():
+    s = LiveState(CONFIG)
+    for _ in range(5):
+        s.add("a1", 20, received_at=100)
+        s.add("a2", 0, received_at=100)
+    # Both cameras were off for over a minute; the room emptied out meanwhile.
+    s.add("a1", 3, received_at=200)
+    s.add("a2", 0, received_at=200)
+    assert s.zones_snapshot(now=200)[0]["occupancy"] == 3
