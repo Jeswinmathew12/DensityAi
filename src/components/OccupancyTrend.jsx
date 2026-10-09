@@ -4,7 +4,16 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 const AXIS = { fill: 'var(--text-muted)', fontSize: 12 };
 const TIP = { border: '1px solid var(--border)', borderRadius: 8, boxShadow: 'none', fontSize: 13 };
 
-export default function OccupancyTrend({ data, title = 'Occupancy (last 24h)' }) {
+// Hours with occupancy null had no camera data; they are drawn as gaps, not as zero.
+export default function OccupancyTrend({ data = [], title = 'Occupancy (last 24h)' }) {
+  if (!data.some((d) => d.occupancy != null)) {
+    return (
+      <div className="card">
+        <h2>{title}</h2>
+        <p className="chart-empty">No occupancy data in the last 24 hours yet.</p>
+      </div>
+    );
+  }
   return (
     <div className="card">
       <h2>{title}</h2>

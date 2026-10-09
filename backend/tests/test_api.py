@@ -86,3 +86,7 @@ def test_health_lists_cameras(client):
     client.post("/api/ingest", json=sample(), headers=AUTH)
     [cam] = client.get("/api/health").json()["cameras"]
     assert (cam["id"], cam["zoneId"], cam["fps"], cam["stale"]) == ("cam-1", "zone-a", 28.0, False)
+
+
+def test_health_names_the_database(client):
+    assert client.get("/api/health").json()["database"] == "test.db"

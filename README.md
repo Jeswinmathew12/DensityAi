@@ -96,15 +96,16 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
   - A zone is marked `stale` (shown as "Offline") when its cameras stop reporting for 10 seconds.
 - **Endpoints:**
   - `GET /api/zones`: live zones, same shape as `generateZones()`
+  - `GET /api/history`: last 24 local hours (trends, traffic) and today's stats and insights, built from stored samples. Same shapes as the mock generators, with `null` where there is no data, so a camera that was off shows as a gap, not 0.
   - `GET /api/health`: per-camera last-seen time and FPS
   - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
   - `GET /`: the built dashboard, if a `build/` folder exists (see [Viewing on other devices](#viewing-on-other-devices))
 - **Configuration:**
   - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
-  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`)
+  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
   - Frontend: `REACT_APP_API_URL`. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from.
 
-Coming for Demo 2: minute rollups and real history for Trends, traffic, stats and insights, served as part of the same contract.
+In live mode the dashboard loads `/api/history` on connect and every minute, so nothing on screen is simulated. A new database starts empty, and history is kept across camera and backend restarts.
 
 ## How to run
 
@@ -130,10 +131,14 @@ Needs Python 3.9+. Use three terminals:
 
 ```bash
 npm run backend:setup   # once: creates backend/.venv and installs FastAPI etc.
-npm run backend         # terminal 1: API at http://localhost:8000
+npm run backend:sim     # terminal 1: API at http://localhost:8000, history in backend/sim.db
 npm run simulate        # terminal 2: fake Jetson posting counts every second
 npm run start:live      # terminal 3: dashboard using the backend
 ```
+
+With the real Jetson, use `npm run backend` instead of `backend:sim`. Real history lives in `backend/density.db` and simulated history in `backend/sim.db`, so the two never mix. The simulator refuses to post to a backend that is writing `density.db`.
+
+To start history over (for example before a demo), stop the backend and run `npm run backend:reset`. It moves `backend/density.db` into `backend/backups/` rather than deleting it. Use `npm run backend:reset -- backend/sim.db` for the simulator's history.
 
 Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` fast-forwards a minute per second, and `--dropout 0.02` makes cameras go silent now and then to test the offline state. On Windows, set `REACT_APP_DATA_SOURCE=live` in a `.env.local` file and use `npm start`, since the `start:live` script uses macOS/Linux syntax.
 
@@ -163,7 +168,9 @@ Then on a phone or laptop, open `http://<that-ip>:8000`. The page connects to th
 | `npm run build:live` | Production build using the backend, for serving from port 8000 |
 | `npm test` | Run tests |
 | `npm run backend` | Backend at http://localhost:8000, reloads on changes |
+| `npm run backend:sim` | Backend using `backend/sim.db`, for the simulator |
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
+| `npm run backend:reset` | Move `backend/density.db` to `backend/backups/` so history starts empty |
 | `npm run backend:test` | Backend tests |
 
 ## How to run on the Jetson

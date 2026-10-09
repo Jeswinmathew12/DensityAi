@@ -5,6 +5,9 @@
     python backend/simulator.py --speed 60       # one simulated minute per real second
     python backend/simulator.py --dropout 0.02   # 2% chance per second of a camera going silent
 
+Run it against `npm run backend:sim`, which keeps simulated counts in backend/sim.db. It refuses
+to post into the real history (backend/density.db) unless you pass --allow-real-db.
+
 Stdlib only, so it runs without installing anything.
 """
 import argparse
@@ -19,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 ZONES_PATH = Path(__file__).resolve().parent / "zones.json"
+REAL_DB = "density.db"
 
 
 def day_curve(hour):
@@ -76,6 +80,20 @@ def post(url, token, sample):
     urllib.request.urlopen(req, timeout=3).close()
 
 
+def wait_for_backend(url):
+    """Block until the backend answers, then return its /api/health."""
+    warned = False
+    while True:
+        try:
+            with urllib.request.urlopen(f"{url}/api/health", timeout=3) as r:
+                return json.load(r)
+        except OSError:
+            if not warned:
+                print(f"Can't reach {url}, retrying every second...")
+                warned = True
+            time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default=os.environ.get("DENSITY_API_URL", "http://localhost:8000"))
@@ -83,7 +101,15 @@ def main():
     parser.add_argument("--hour", type=float, help="simulated hour of day to start at (default: now)")
     parser.add_argument("--speed", type=float, default=1, help="simulated seconds per real second")
     parser.add_argument("--dropout", type=float, default=0, help="chance per second of a camera going silent for 15-30 s")
+    parser.add_argument("--allow-real-db", action="store_true", help=f"post even if the backend is recording real history ({REAL_DB})")
     args = parser.parse_args()
+
+    if wait_for_backend(args.url).get("database") == REAL_DB and not args.allow_real_db:
+        raise SystemExit(
+            f"{args.url} is recording real history in backend/{REAL_DB}, so simulated counts would mix into it.\n"
+            "Start the backend with `npm run backend:sim` instead (it uses backend/sim.db),\n"
+            "or pass --allow-real-db if you really mean it."
+        )
 
     config = json.loads(ZONES_PATH.read_text())
     capacity = {z["id"]: z["capacity"] for z in config["zones"]}

@@ -9,6 +9,14 @@ export const API_URL =
   (process.env.NODE_ENV === 'production' ? window.location.origin : 'http://localhost:8000');
 const WS_URL = API_URL.replace(/^http/, 'ws');
 
+// Trends, traffic, stats and insights built from stored samples. Same shapes as the mock
+// generators, with null wherever there is no data.
+export async function fetchHistory() {
+  const res = await fetch(`${API_URL}/api/history`);
+  if (!res.ok) throw new Error(`GET /api/history failed: ${res.status}`);
+  return res.json();
+}
+
 // Opens /ws/live and keeps it open, retrying with backoff (1s, 2s, 4s ... capped at 10s).
 // onStatus gets 'open' or 'offline'. Returns a function that closes it for good.
 export function openLiveSocket({ onMessage, onStatus }) {

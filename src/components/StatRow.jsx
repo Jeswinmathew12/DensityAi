@@ -1,5 +1,6 @@
 import React from 'react';
 
+// null means no data yet, shown as a dash rather than 0.
 export default function StatRow({ stats }) {
   const items = [
     ['Peak hour', stats.peakHour],
@@ -11,7 +12,7 @@ export default function StatRow({ stats }) {
       {items.map(([label, value]) => (
         <div key={label}>
           <dt>{label}</dt>
-          <dd>{value}</dd>
+          <dd>{value ?? '-'}</dd>
         </div>
       ))}
     </dl>

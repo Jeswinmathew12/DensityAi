@@ -30,7 +30,8 @@ export function generateZones() {
   }));
 }
 
-// { zoneId, hour, label, occupancy }[] for the last 24 hours
+// { hour, label, occupancy }[] for the last 24 hours. The backend uses occupancy: null
+// for hours with no camera data.
 export function generateOccupancyTrend(zoneId = 'zone-a') {
   const zone = ZONES.find((z) => z.id === zoneId) || ZONES[0];
   const now = new Date().getHours();
@@ -44,7 +45,8 @@ export function generateOccupancyTrend(zoneId = 'zone-a') {
   });
 }
 
-// { hour, label, entries, exits }[] - exits are plotted negative by the chart
+// { hour, label, entries, exits }[] - exits are plotted negative by the chart.
+// The backend uses null for hours with no camera data.
 export function generateTraffic() {
   const now = new Date().getHours();
   return Array.from({ length: 24 }, (_, i) => {
@@ -59,7 +61,7 @@ export function generateTraffic() {
   });
 }
 
-// { peakHour, avgOccupancy, totalVisitors }
+// { peakHour, avgOccupancy, totalVisitors } - any of them null when there is no data yet
 export function generateDailyStats() {
   return { peakHour: '2:00 PM', avgOccupancy: rand(8, 20), totalVisitors: rand(80, 220) };
 }
