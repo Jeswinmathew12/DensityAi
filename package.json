@@ -17,6 +17,7 @@
     "test": "react-scripts test",
     "backend:setup": "python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements-dev.txt",
     "backend": "backend/.venv/bin/uvicorn backend.app.main:create_app --factory --reload --reload-dir backend --port 8000",
+    "serve": "jetson/start.sh",
     "backend:sim": "DENSITY_DB=backend/sim.db backend/.venv/bin/uvicorn backend.app.main:create_app --factory --reload --reload-dir backend --port 8000",
     "backend:reset": "backend/.venv/bin/python backend/reset_db.py",
     "backend:test": "backend/.venv/bin/python -m pytest backend/tests",

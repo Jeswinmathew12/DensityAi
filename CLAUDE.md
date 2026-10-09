@@ -24,6 +24,7 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 - `npm test`: run tests
 - `npm run backend:setup`: create `backend/.venv` and install Python deps (once)
 - `npm run backend`: FastAPI backend at http://localhost:8000 (auto-reloads)
+- `npm run serve`: Jetson demo mode, one command (`jetson/start.sh`): rebuilds the live dashboard if needed, serves it plus the API on port 8000 for all devices, runs the pipeline and restarts it if it stops
 - `npm run backend:sim`: same backend, but history goes to `backend/sim.db` (use this with the simulator)
 - `npm run simulate`: fake Jetson that posts counts to the backend (`-- --help` for flags). Refuses to post into the real `backend/density.db`
 - `npm run backend:reset`: stop the backend first; moves `backend/density.db` to `backend/backups/` so history starts empty
@@ -52,6 +53,8 @@ jetson/occupancy_pipeline.py   DeepStream 7.1 app: USB camera -> PeopleNet -> nv
 jetson/config_nvdsanalytics.txt ROI + line-crossing config (line crossing off for Demo 1)
 jetson/setup_peoplenet.sh      Downloads PeopleNet and writes config_infer_peoplenet.txt (idempotent)
 jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson
+jetson/start.sh                `npm run serve`: backend + pipeline in one command, pipeline auto-restarts
+jetson/install-service.sh      Installs/removes the `densityai` systemd service that runs start.sh at boot
 docs/jetson-setup.md           From-scratch Jetson runbook + known issues (source of truth for the Jetson)
 ```
 

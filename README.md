@@ -168,6 +168,7 @@ Then on a phone or laptop, open `http://<that-ip>:8000`. The page connects to th
 | `npm run build:live` | Production build using the backend, for serving from port 8000 |
 | `npm test` | Run tests |
 | `npm run backend` | Backend at http://localhost:8000, reloads on changes |
+| `npm run serve` | Jetson: build if needed, backend on port 8000 for all devices, pipeline with auto-restart |
 | `npm run backend:sim` | Backend using `backend/sim.db`, for the simulator |
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
 | `npm run backend:reset` | Move `backend/density.db` to `backend/backups/` so history starts empty |
@@ -177,7 +178,63 @@ Then on a phone or laptop, open `http://<that-ip>:8000`. The page connects to th
 
 The Jetson already has everything installed. To rebuild one from scratch, follow [docs/jetson-setup.md](docs/jetson-setup.md).
 
-Run each command in its own terminal on the Jetson, in this order.
+### Normal use: the boot service
+
+The Jetson runs DensityAI as a background service called `densityai`. It starts by itself whenever the Jetson powers on, so on demo day you only need to:
+
+1. Power on the Jetson and wait about a minute.
+2. Open the dashboard in a browser. **Nothing opens by itself**; type the address:
+   - on the Jetson: `http://localhost:8000`
+   - on a laptop or phone on the same Wi-Fi: `http://<jetson-ip>:8000` (find the IP with `hostname -I`)
+
+The service runs the backend and the camera pipeline together, restarts the pipeline if the camera is unplugged or it crashes, and waits for the clock to sync after a power loss so counts aren't stamped 1970. It shows no camera window. Stopping it stops the dashboard too; history is kept in `backend/density.db`, and the time it was off shows as a gap.
+
+Install it once (already done on our Jetson):
+
+```bash
+sudo jetson/install-service.sh            # install, start now, and start at every boot
+sudo jetson/install-service.sh --remove   # uninstall completely
+```
+
+Day-to-day commands:
+
+| Command | What it does |
+|---|---|
+| `systemctl status densityai` | Is it running? Look for "active (running)". Press `q` to exit. |
+| `journalctl -u densityai -f` | Watch its output live. Ctrl+C stops watching, not the service. |
+| `sudo systemctl stop densityai` | Stop it now. It starts again at the next power-on. |
+| `sudo systemctl start densityai` | Start it again. |
+| `sudo systemctl restart densityai` | Restart it, e.g. after changing frontend code (it rebuilds the dashboard first, about a minute). |
+| `sudo systemctl disable --now densityai` | Stop it and keep it from starting at power-on. |
+| `sudo systemctl enable --now densityai` | Undo that: start it now and at every power-on. |
+
+Settings such as `INGEST_TOKEN` go in `/etc/densityai.env`, one `NAME=value` per line, then restart the service.
+
+### Running by hand: `npm run serve`
+
+Use this when you want the output in your terminal or the camera window, for example while aiming the camera or adjusting the counting region. **Stop the service first**: both use port 8000 and the camera, and `npm run serve` refuses to start ("Something is already running on port 8000") while the service is on.
+
+```bash
+sudo systemctl stop densityai
+cd ~/DensityAi
+npm run serve                  # in a terminal on the Jetson's own desktop
+DISPLAY=:0 npm run serve       # over SSH (e.g. VS Code Remote): window appears on the Jetson's monitor
+# ... Ctrl+C when done, then hand back to the service:
+sudo systemctl start densityai
+```
+
+`npm run serve` runs [jetson/start.sh](jetson/start.sh), the same script the service uses. It:
+
+- rebuilds the dashboard if the frontend changed since the last live build
+- starts the backend on port 8000, reachable from other devices, and prints the dashboard address
+- waits for the USB camera, runs the pipeline, and restarts it whenever it stops. Unplugging and replugging the camera needs no command; the count shows Offline until the camera is back.
+- stops everything cleanly on Ctrl+C
+
+Over SSH without `DISPLAY=:0`, the pipeline runs without its window. Extra flags go to the pipeline, for example `npm run serve -- --tracker`.
+
+### Separate terminals (development)
+
+Stop the service first (`sudo systemctl stop densityai`), then run each command in its own terminal on the Jetson, in this order.
 
 **1. Backend**
 
