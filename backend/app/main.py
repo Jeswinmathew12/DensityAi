@@ -14,6 +14,7 @@ from typing import List, Optional, Union
 
 from fastapi import FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db
@@ -126,5 +127,11 @@ def create_app(db_path=None, zones_path=None, ingest_token=None):
             pass
         finally:
             clients.discard(ws)
+
+    # Serve the built dashboard (`npm run build:live`) from the same port, so any device that
+    # can reach the backend can open it. Mounted last so /api and /ws take priority.
+    build_dir = Path(os.environ.get("DENSITY_STATIC") or BACKEND_DIR.parent / "build")
+    if build_dir.is_dir():
+        app.mount("/", StaticFiles(directory=build_dir, html=True), name="dashboard")
 
     return app

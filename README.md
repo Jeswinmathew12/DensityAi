@@ -98,10 +98,11 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
   - `GET /api/zones`: live zones, same shape as `generateZones()`
   - `GET /api/health`: per-camera last-seen time and FPS
   - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
+  - `GET /`: the built dashboard, if a `build/` folder exists (see [Viewing on other devices](#viewing-on-other-devices))
 - **Configuration:**
   - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
-  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`)
-  - Frontend: `REACT_APP_API_URL` (default `http://localhost:8000`)
+  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`)
+  - Frontend: `REACT_APP_API_URL`. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from.
 
 Coming for Demo 2: minute rollups and real history for Trends, traffic, stats and insights, served as part of the same contract.
 
@@ -136,6 +137,22 @@ npm run start:live      # terminal 3: dashboard using the backend
 
 Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` fast-forwards a minute per second, and `--dropout 0.02` makes cameras go silent now and then to test the offline state. On Windows, set `REACT_APP_DATA_SOURCE=live` in a `.env.local` file and use `npm start`, since the `start:live` script uses macOS/Linux syntax.
 
+### Viewing on other devices
+
+The backend can serve the dashboard itself, so anyone on the same network can open it in a browser with nothing to install. On the machine running the backend:
+
+```bash
+npm run build:live      # build the dashboard in live mode (repeat after frontend changes)
+backend/.venv/bin/uvicorn backend.app.main:create_app --factory --host 0.0.0.0 --port 8000
+hostname -I             # this machine's IP address
+```
+
+Then on a phone or laptop, open `http://<that-ip>:8000`. The page connects to the backend at the same address automatically.
+
+- `--host 0.0.0.0` is required. `npm run backend` only accepts connections from the same machine.
+- Viewers must be on the same network. Campus Wi-Fi often blocks device-to-device traffic. If the page won't load, put everything on a phone hotspot or your own router.
+- If the machine has a firewall, open port 8000 (for example `sudo ufw allow 8000`).
+
 ### Other commands
 
 | Command | What it does |
@@ -143,6 +160,7 @@ Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` 
 | `npm start` | Dev server at http://localhost:3000 (mock data) |
 | `npm run start:live` | Dev server using the backend |
 | `npm run build` | Production build into `build/` (run this to check for errors) |
+| `npm run build:live` | Production build using the backend, for serving from port 8000 |
 | `npm test` | Run tests |
 | `npm run backend` | Backend at http://localhost:8000, reloads on changes |
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
