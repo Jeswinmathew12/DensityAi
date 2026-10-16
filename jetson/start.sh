@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # One command for demo day. Builds the dashboard if the code changed, starts the backend on
-# port 8000 (reachable from other devices), then runs the camera pipeline and restarts it
-# whenever it stops, e.g. after the camera is unplugged and plugged back in. Ctrl+C stops all.
+# port 8000 (reachable from other devices) and prints its addresses, then runs the camera
+# pipeline and restarts it whenever it stops, e.g. after the camera is unplugged and plugged back
+# in. Ctrl+C stops all.
 #
 #   npm run serve                   # from the repo root
 #   jetson/start.sh --tracker       # extra flags go to occupancy_pipeline.py
 #
 # Env (all optional): CAMERA_DEVICE, DENSITY_PORT (default 8000), plus INGEST_TOKEN,
-# DENSITY_DB and DENSITY_TZ, which the backend and pipeline read themselves.
+# DENSITY_DB and DENSITY_TZ, which the backend and pipeline read themselves. REACT_APP_API_URL is
+# ignored: the built dashboard always talks to the address it was opened at.
 # jetson/install-service.sh runs this at boot.
 set -u
 cd "$(dirname "$0")/.."
@@ -39,12 +41,26 @@ if [ "$(date +%Y)" -lt 2025 ]; then
   until [ "$(date +%Y)" -ge 2025 ]; do sleep 5; done
 fi
 
-# Rebuild when the frontend changed since the last live build. The marker file also catches a
-# plain `npm run build`, which would serve mock data: that build wipes build/ and the marker.
+# The dashboard must work on any network (home Wi-Fi, campus, hotspot, USB, Tailscale), so the
+# build never gets a fixed backend address: with REACT_APP_API_URL empty, the page talks to
+# whatever address it was opened at. An address from .env once got baked in and broke on campus.
+ENV_FILES=()
+for f in .env*; do [ -f "$f" ] && ENV_FILES+=("$f"); done
+for f in "${ENV_FILES[@]}"; do
+  grep -qE '^[[:space:]]*(export[[:space:]]+)?REACT_APP_API_URL=' "$f" &&
+    log "Warning: $f sets REACT_APP_API_URL. npm run serve ignores it (it's only for the dev server)."
+done
+[ -n "${REACT_APP_API_URL:-}" ] &&
+  log "Warning: REACT_APP_API_URL is set in the environment. npm run serve ignores it."
+
+# Rebuild when the frontend, a .env file or this script changed since the last live build. The
+# marker file also catches a plain `npm run build`, which would serve mock data: that build wipes
+# build/ and the marker.
 MARKER=build/.live-build
-if [ ! -f "$MARKER" ] || [ -n "$(find src public package.json -newer "$MARKER" -print -quit)" ]; then
+if [ ! -f "$MARKER" ] ||
+  [ -n "$(find src public package.json jetson/start.sh "${ENV_FILES[@]}" -newer "$MARKER" -print -quit)" ]; then
   log "Building the dashboard (npm run build:live)..."
-  npm run build:live || { log "Dashboard build failed"; exit 1; }
+  REACT_APP_API_URL= npm run build:live || { log "Dashboard build failed"; exit 1; }
   touch "$MARKER"
 fi
 
@@ -56,8 +72,27 @@ for _ in $(seq 30); do
   kill -0 "$BACKEND" 2>/dev/null || { log "Backend failed to start"; exit 1; }
   sleep 1
 done
-IP=$(hostname -I | awk '{print $1}')
-log "Dashboard: http://${IP:-localhost}:$PORT"
+
+# Every address the dashboard can be opened at. Which one works depends on the network the viewer
+# shares with the Jetson. Always http: the backend doesn't serve https.
+log "Dashboard is up. Open whichever address the viewer's device can reach:"
+log "  http://localhost:$PORT  (on this device)"
+for ip in $(hostname -I); do
+  iface=$(ip -o addr show 2>/dev/null | awk -v a="$ip" '{split($4, p, "/")} p[1] == a {print $2; exit}')
+  case $ip in *:*) url="http://[$ip]:$PORT" ;; *) url="http://$ip:$PORT" ;; esac
+  log "  $url${iface:+  ($iface)}"
+done
+log "  http://$(hostname).local:$PORT"
+if command -v tailscale >/dev/null; then
+  ts=$(tailscale status --json 2>/dev/null | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+if s.get("BackendState") == "Running":
+    me = s.get("Self") or {}
+    print(" ".join([me.get("DNSName", "").rstrip(".")] + me.get("TailscaleIPs", [])[:1]))
+' 2>/dev/null)
+  for t in $ts; do log "  http://$t:$PORT  (Tailscale)"; done
+fi
 
 STOPPING=
 FAILED=0

@@ -40,7 +40,15 @@ export default function App() {
           // Live mode before the backend's first message.
           <div className="card">
             <p className="live"><span className="live-dot off" /> Connecting to the backend at {API_URL}…</p>
-            <p className="kpi-sub">Start it with <code>npm run backend</code>.</p>
+            <p className="kpi-sub">
+              Start it with <code>npm run serve</code> (Jetson) or <code>npm run backend</code> (development).
+            </p>
+            {process.env.NODE_ENV === 'production' && (
+              <p className="kpi-sub">
+                If that address isn't the one in your browser's address bar, this build is stale. Rebuild it on
+                the Jetson with <code>rm -rf build &amp;&amp; npm run serve</code>.
+              </p>
+            )}
           </div>
         )}
       </main>

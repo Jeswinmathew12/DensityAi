@@ -103,7 +103,7 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
 - **Configuration:**
   - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
   - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
-  - Frontend: `REACT_APP_API_URL`. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from.
+  - Frontend: `REACT_APP_API_URL`, for the dev server only. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from. `npm run serve` always builds with it unset (and warns if a `.env` file sets it), so the dashboard works on whatever network the Jetson is on.
 
 In live mode the dashboard loads `/api/history` on connect and every minute, so nothing on screen is simulated. A new database starts empty, and history is kept across camera and backend restarts.
 
@@ -147,15 +147,16 @@ Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` 
 The backend can serve the dashboard itself, so anyone on the same network can open it in a browser with nothing to install. On the machine running the backend:
 
 ```bash
-npm run build:live      # build the dashboard in live mode (repeat after frontend changes)
+REACT_APP_API_URL= npm run build:live   # live-mode build with no fixed address (repeat after frontend changes)
 backend/.venv/bin/uvicorn backend.app.main:create_app --factory --host 0.0.0.0 --port 8000
-hostname -I             # this machine's IP address
+hostname -I                             # this machine's IP addresses
 ```
 
-Then on a phone or laptop, open `http://<that-ip>:8000`. The page connects to the backend at the same address automatically.
+Then on a phone or laptop, open `http://<one-of-those-ips>:8000` (http, not https). The page connects to the backend at the same address automatically. On the Jetson, `npm run serve` does all of this and prints the addresses for you.
 
 - `--host 0.0.0.0` is required. `npm run backend` only accepts connections from the same machine.
-- Viewers must be on the same network. Campus Wi-Fi often blocks device-to-device traffic. If the page won't load, put everything on a phone hotspot or your own router.
+- Leave `REACT_APP_API_URL` empty for this build. If it's set (for example in `.env`), that address is baked into the build and the dashboard breaks on any other network.
+- Viewers must be on the same network. On campus, eduroam works; `ncsu-guest` may block device-to-device traffic. See [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
 - If the machine has a firewall, open port 8000 (for example `sudo ufw allow 8000`).
 
 ### Other commands
@@ -185,7 +186,7 @@ The Jetson runs DensityAI as a background service called `densityai`. It starts 
 1. Power on the Jetson and wait about a minute.
 2. Open the dashboard in a browser. **Nothing opens by itself**; type the address:
    - on the Jetson: `http://localhost:8000`
-   - on a laptop or phone on the same Wi-Fi: `http://<jetson-ip>:8000` (find the IP with `hostname -I`)
+   - on a laptop or phone: one of the addresses the service prints at startup (`journalctl -u densityai | grep start`), or `http://<ip>:8000` with an IP from `hostname -I`. Which one works depends on the network; see [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
 
 The service runs the backend and the camera pipeline together, restarts the pipeline if the camera is unplugged or it crashes, and waits for the clock to sync after a power loss so counts aren't stamped 1970. It shows no camera window. Stopping it stops the dashboard too; history is kept in `backend/density.db`, and the time it was off shows as a gap.
 
@@ -225,12 +226,38 @@ sudo systemctl start densityai
 
 `npm run serve` runs [jetson/start.sh](jetson/start.sh), the same script the service uses. It:
 
-- rebuilds the dashboard if the frontend changed since the last live build
-- starts the backend on port 8000, reachable from other devices, and prints the dashboard address
+- rebuilds the dashboard if the frontend, a `.env` file or `start.sh` changed since the last live build. The build never has a fixed backend address: `REACT_APP_API_URL` is ignored (with a warning if a `.env` file sets it), and the page talks to whatever address it was opened at.
+- starts the backend on port 8000, reachable from other devices, and prints every address the dashboard can be opened at: `localhost`, each IP from `hostname -I` with its interface, `<hostname>.local`, and the Tailscale name and IP if Tailscale is connected
 - waits for the USB camera, runs the pipeline, and restarts it whenever it stops. Unplugging and replugging the camera needs no command; the count shows Offline until the camera is back.
 - stops everything cleanly on Ctrl+C
 
 Over SSH without `DISPLAY=:0`, the pipeline runs without its window. Extra flags go to the pipeline, for example `npm run serve -- --tracker`.
+
+### Reaching the Jetson on any network
+
+The dashboard has no fixed address: it works at any address that reaches port 8000 on the Jetson, always over `http://` (the backend doesn't serve https). What changes from network to network is which address your laptop or phone can reach.
+
+| Where | How | Open |
+|---|---|---|
+| Home Wi-Fi, your own router | Jetson and viewer on the same Wi-Fi | the Wi-Fi IP `npm run serve` prints, or `http://<hostname>.local:8000` |
+| Phone hotspot | Jetson and viewers join the hotspot | the IP printed for the Wi-Fi interface |
+| Campus, `eduroam` | Jetson and viewer both on eduroam (tested: a phone reached the dashboard) | the Wi-Fi IP `npm run serve` prints |
+| Campus, `ncsu-guest` | Device-to-device traffic may be blocked | use eduroam, USB, a phone hotspot or Tailscale instead |
+| USB cable | Jetson's USB-C port to the laptop (USB device mode) | `http://192.168.55.1:8000` |
+| Tailscale | Jetson and viewers logged into the same tailnet; works on any network, campus included | the Tailscale name or IP printed |
+
+- **USB** is the most reliable for a single laptop on demo day: no Wi-Fi involved. The Jetson's side of the link is always `192.168.55.1`, and the laptop gets an address automatically.
+- **Tailscale** setup, once on the Jetson: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`, then install the Tailscale app on each laptop or phone and log in to the same account. Restart the service (or `npm run serve`) afterwards so it prints the Tailscale address.
+- **`.local` names** need mDNS, which works from macOS, iOS and most Linux, but not always from Windows or Android. Use the IP there.
+- If SSH to the Jetson works but the page doesn't, forward the port: `ssh -L 8000:localhost:8000 <user>@<jetson-address>`, then open `http://localhost:8000` on the laptop (VS Code Remote-SSH can do this from its Ports tab).
+- The addresses are printed once at startup. If the Jetson joins a different network while running, check `hostname -I` again; no rebuild is needed.
+
+**Stuck on "Connecting to the backend at …"?** If the address in that message isn't the one in your browser's address bar, the build has an old address baked in. Rebuild it:
+
+```bash
+rm -rf build && npm run serve                                   # by hand
+rm -rf build && sudo systemctl restart densityai                # or with the service
+```
 
 ### Separate terminals (development)
 
@@ -264,8 +291,10 @@ The pipeline reads the USB camera, counts people in the room region with PeopleN
 **To view the dashboard from a laptop instead,** run step 2 on the laptop with:
 
 ```bash
-REACT_APP_API_URL=http://<jetson-ip>:8000 npm run start:live
+REACT_APP_API_URL=http://<jetson-address>:8000 npm run start:live
 ```
+
+`<jetson-address>` is any address from [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network). This override only affects the dev server; don't put it in a `.env` file on the Jetson.
 
 ### Pipeline options
 

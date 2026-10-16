@@ -90,3 +90,34 @@ def test_health_lists_cameras(client):
 
 def test_health_names_the_database(client):
     assert client.get("/api/health").json()["database"] == "test.db"
+
+
+# The dashboard served by `npm run serve` is opened under whatever address the network gives the
+# Jetson (Wi-Fi IP, USB, hostname.local, Tailscale), so same-origin must work for any of them.
+ORIGINS = ["http://10.20.30.40:8000", "http://jetson.local:8000", "http://jetson.tail1234.ts.net:8000"]
+
+
+@pytest.mark.parametrize("origin", ORIGINS)
+def test_same_origin_dashboard_works_under_any_address(client, origin):
+    headers = {"Host": origin.split("//")[1], "Origin": origin}
+    assert client.get("/api/history", headers=headers).status_code == 200
+    with client.websocket_connect("/ws/live", headers=headers) as ws:
+        assert ws.receive_json()["type"] == "zones"
+
+
+def test_cors_stays_closed_to_other_sites(client):
+    res = client.get("/api/zones", headers={"Origin": "http://example.com"})
+    assert "access-control-allow-origin" not in res.headers
+    res = client.get("/api/zones", headers={"Origin": "http://localhost:3000"})
+    assert res.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_serves_built_dashboard_under_any_hostname(tmp_path, db_path, monkeypatch):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<title>DensityAI</title>")
+    monkeypatch.setenv("DENSITY_STATIC", str(build))
+    with TestClient(create_app(db_path=db_path)) as c:
+        for origin in ORIGINS:
+            res = c.get("/", headers={"Host": origin.split("//")[1]})
+            assert res.status_code == 200 and "DensityAI" in res.text

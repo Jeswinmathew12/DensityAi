@@ -78,6 +78,9 @@ def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None):
         conn.close()
 
     app = FastAPI(title="DensityAI", lifespan=lifespan)
+    # Only the dev server (port 3000) is cross-origin. The built dashboard is served from this
+    # same port, so it's same-origin under any hostname or IP and needs no CORS entry; /ws/live
+    # doesn't check Origin either. Keep it that way so `npm run serve` works on any network.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
