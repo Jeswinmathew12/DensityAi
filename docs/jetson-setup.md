@@ -301,6 +301,35 @@ Open `http://localhost:3000` in a browser **on the Jetson**. The backend's CORS 
 
 **Success:** after a reboot, `journalctl -u densityai -f` shows `[start] Dashboard: http://...` and pipeline output, and the dashboard opens from a laptop on the same network.
 
+## Step 12: Wi-Fi camera (Tapo C120)
+
+The pipeline can read a Wi-Fi camera's RTSP stream instead of the USB camera. It is decoded on the Jetson's hardware decoder, and only counts leave the Jetson, as with USB. Tested target: TP-Link Tapo C120 (5V USB-C, so it runs from a power bank).
+
+**Network:** the camera and the Jetson must be on the same Wi-Fi, and that network must let devices talk to each other. Home Wi-Fi or a phone hotspot works. `ncsu-guest` and eduroam do not ([known issue 5](#5-ncsu-guest-network)). Tapo cameras only join 2.4 GHz networks: on an iPhone hotspot, turn on "Maximize Compatibility".
+
+**In the Tapo app:**
+1. Add the camera and connect it to that Wi-Fi.
+2. Camera > gear icon > Advanced Settings > Camera Account: create a username and password. Use letters and numbers only, because `@ : / #` break the address.
+3. Camera > gear icon > Device Info: note the IP address.
+
+**Test it with a window** (stop the service first: `sudo systemctl stop densityai`):
+
+```bash
+python3 jetson/occupancy_pipeline.py --uri rtsp://USER:PASS@IP:554/stream1
+```
+
+`stream1` is full quality, `stream2` is low resolution. **Success:** "Camera stream connected", then a window with boxes around people, and counts once a second.
+
+**Make it permanent:** add the address to `/etc/densityai.env` (outside git, because it holds the password):
+
+```bash
+sudo nano /etc/densityai.env
+```
+
+Add one line, `CAMERA_URI=rtsp://USER:PASS@IP:554/stream1`, save, then `sudo systemctl start densityai`. Both the service and `npm run serve` read it. To go back to the USB camera, delete the line.
+
+If the camera drops off the Wi-Fi, the pipeline exits after 20 s without frames and `start.sh` reconnects. If the camera's IP changes (check Device Info again), update `CAMERA_URI`. Reserving the IP in the router stops that.
+
 ## Debugging with gst-launch
 
 If the Python app misbehaves, run the same chain without any Python. It tells you whether the problem is the camera, the model or the app.

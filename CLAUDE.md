@@ -49,7 +49,7 @@ backend/app/processing.py      Pure logic: smoothing, multi-camera fusion, stale
 backend/app/db.py              SQLite schema + writes
 backend/zones.json             Zones (capacity, fusion) and which camera belongs to which zone
 backend/simulator.py           Fake Jetson for development
-jetson/occupancy_pipeline.py   DeepStream 7.1 app: USB camera -> PeopleNet -> nvdsanalytics ROI count -> probe_client
+jetson/occupancy_pipeline.py   DeepStream 7.1 app: USB or RTSP (--uri) camera -> PeopleNet -> nvdsanalytics ROI count -> probe_client
 jetson/config_nvdsanalytics.txt ROI + line-crossing config (line crossing off for Demo 1)
 jetson/setup_peoplenet.sh      Downloads PeopleNet and writes config_infer_peoplenet.txt (idempotent)
 jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson

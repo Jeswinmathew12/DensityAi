@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """DensityAI occupancy pipeline for the Jetson (DeepStream 7.1, pyds 1.2.0).
 
-USB camera -> PeopleNet -> [tracker] -> nvdsanalytics (ROI count) -> probe -> backend.
+USB or Wi-Fi (RTSP) camera -> PeopleNet -> [tracker] -> nvdsanalytics (ROI count) -> probe -> backend.
 
     python3 jetson/occupancy_pipeline.py
+    python3 jetson/occupancy_pipeline.py --uri rtsp://user:pass@192.168.1.50:554/stream1
     python3 jetson/occupancy_pipeline.py --no-display          # headless (SSH, systemd)
     python3 jetson/occupancy_pipeline.py --tracker             # needed for line crossing
 
@@ -11,13 +12,15 @@ Run with the system python3 (where pyds and gi are installed), not backend/.venv
 Only counts leave the Jetson, never frames.
 
 Metadata parsing follows NVIDIA's deepstream_python_apps v1.2.0
-apps/deepstream-nvdsanalytics, and camera input follows apps/deepstream-test1-usbcam.
+apps/deepstream-nvdsanalytics, USB input follows apps/deepstream-test1-usbcam and RTSP
+input follows apps/deepstream-test3 (uridecodebin, which picks the nvv4l2decoder hardware decoder).
 """
 import argparse
 import os
 import signal
 import sys
 import time
+import urllib.parse
 
 import gi
 
@@ -37,6 +40,10 @@ TRACKER_CONFIG = os.path.join(TRACKER_DIR, "config_tracker_NvDCF_perf.yml")
 WIDTH, HEIGHT, FPS = 1280, 720, 30
 ROI_NAME = "RoomArea"
 ENTRY_NAME, EXIT_NAME = "Entry", "Exit"
+# A Wi-Fi camera that drops off the network often stalls instead of raising an error. If no
+# frame arrives for this long, exit so start.sh restarts the pipeline and reconnects.
+STALL_SECONDS = 20
+RTSP_LATENCY_MS = 200
 
 
 class FpsCounter:
@@ -96,12 +103,13 @@ def on_bus_message(bus, message, loop):
     return True
 
 
-def make_analytics_probe(client, camera_id):
-    """Builds the pad probe for the nvdsanalytics src pad."""
+def make_analytics_probe(client, camera_id, last_frame):
+    """Builds the pad probe for the nvdsanalytics src pad. Stamps last_frame[0] on every buffer."""
     meta_type = pyds.nvds_get_user_meta_type("NVIDIA.DSANALYTICSFRAME.USER_META")
     fps_counter = FpsCounter()
 
     def probe(pad, info, _user_data):
+        last_frame[0] = time.monotonic()
         gst_buffer = info.get_buffer()
         if not gst_buffer:
             return Gst.PadProbeReturn.OK
@@ -148,16 +156,70 @@ def make_analytics_probe(client, camera_id):
     return probe
 
 
+def redact(uri):
+    """The URI for logs, with the password replaced by ***."""
+    parts = urllib.parse.urlsplit(uri)
+    if parts.password is None:
+        return uri
+    netloc = f"{parts.username}:***@{parts.hostname}" + (f":{parts.port}" if parts.port else "")
+    return urllib.parse.urlunsplit(parts._replace(netloc=netloc))
+
+
+def on_rtsp_source_setup(_decodebin, source):
+    # TCP is steadier than UDP over Wi-Fi: no lost packets, so no smeared frames.
+    if source.find_property("protocols") is not None:
+        Gst.util_set_object_arg(source, "protocols", "tcp")
+    if source.find_property("latency") is not None:
+        source.set_property("latency", RTSP_LATENCY_MS)
+
+
+def make_uri_source(pipeline, uri, conv_in):
+    """uridecodebin for an RTSP (or file) URI. Its video pad appears once the stream starts."""
+    source = make("uridecodebin", "uri-source")
+    source.set_property("uri", uri)
+    source.connect("source-setup", on_rtsp_source_setup)
+
+    def on_pad_added(_src, pad):
+        caps = pad.get_current_caps() or pad.query_caps(None)
+        if not caps.get_structure(0).get_name().startswith("video"):
+            # Audio from the camera's microphone. Drain it into a fakesink, because an unlinked
+            # pad can stop the whole stream with a "not-linked" error.
+            drain = Gst.ElementFactory.make("fakesink", None)
+            drain.set_property("sync", False)
+            pipeline.add(drain)
+            drain.sync_state_with_parent()
+            pad.link(drain.get_static_pad("sink"))
+            return
+        sinkpad = conv_in.get_static_pad("sink")
+        if sinkpad.is_linked():
+            return
+        if pad.link(sinkpad) != Gst.PadLinkReturn.OK:
+            print("Could not link the camera's video stream", file=sys.stderr)
+        else:
+            print("Camera stream connected")
+
+    source.connect("pad-added", on_pad_added)
+    return source
+
+
 def build_pipeline(args):
     pipeline = Gst.Pipeline()
 
-    source = make("v4l2src", "usb-cam")
-    source.set_property("device", args.device)
-    caps_jpeg = make_caps("jpeg-caps", f"image/jpeg,width={WIDTH},height={HEIGHT},framerate={FPS}/1")
-    jpegdec = make("jpegdec", "jpeg-decoder")
-    videoconvert = make("videoconvert", "videoconvert")
     conv_in = make_nvvideoconvert("nvconv-in")
     caps_nvmm = make_caps("nvmm-caps", "video/x-raw(memory:NVMM),format=NV12")
+    if args.uri:
+        # Linked to conv_in when its pad appears (on_pad_added), not here.
+        uri_source = make_uri_source(pipeline, args.uri, conv_in)
+        chain = [conv_in, caps_nvmm]
+    else:
+        uri_source = None
+        source = make("v4l2src", "usb-cam")
+        source.set_property("device", args.device)
+        caps_jpeg = make_caps("jpeg-caps",
+                              f"image/jpeg,width={WIDTH},height={HEIGHT},framerate={FPS}/1")
+        jpegdec = make("jpegdec", "jpeg-decoder")
+        videoconvert = make("videoconvert", "videoconvert")
+        chain = [source, caps_jpeg, jpegdec, videoconvert, conv_in, caps_nvmm]
 
     streammux = make("nvstreammux", "stream-muxer")
     streammux.set_property("batch-size", 1)
@@ -188,9 +250,8 @@ def build_pipeline(args):
         sink = make("nv3dsink", "sink")
     sink.set_property("sync", False)
 
-    chain = [source, caps_jpeg, jpegdec, videoconvert, conv_in, caps_nvmm]
     rest = [pgie] + ([tracker] if tracker else []) + [analytics, conv_out, osd, sink]
-    for element in chain + [streammux] + rest:
+    for element in ([uri_source] if uri_source else []) + chain + [streammux] + rest:
         pipeline.add(element)
 
     for a, b in zip(chain, chain[1:]):
@@ -215,6 +276,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="DensityAI occupancy pipeline (DeepStream 7.1)")
     p.add_argument("--camera-id", default="cam-1", help="must be listed in backend/zones.json")
     p.add_argument("--device", default="/dev/video0", help="V4L2 camera device")
+    p.add_argument("--uri", help="Wi-Fi camera stream instead of USB, e.g. "
+                   "rtsp://user:pass@192.168.1.50:554/stream1 (Tapo: stream1 = full quality)")
     p.add_argument("--infer-config",
                    default=os.path.expanduser("~/models/peoplenet/config_infer_peoplenet.txt"),
                    help="nvinfer config for PeopleNet")
@@ -235,14 +298,29 @@ def main():
     api_url = os.environ.get("DENSITY_API_URL", "http://localhost:8000")
     client = ProbeClient(api_url, token=os.environ.get("INGEST_TOKEN"))
     print(f"Sending counts for {args.camera_id} to {api_url}")
+    print(f"Camera: {redact(args.uri) if args.uri else args.device}")
 
     Gst.init(None)
     pipeline, analytics = build_pipeline(args)
 
+    last_frame = [None]  # monotonic time of the newest frame; None until the first one
     analytics.get_static_pad("src").add_probe(
-        Gst.PadProbeType.BUFFER, make_analytics_probe(client, args.camera_id), None)
+        Gst.PadProbeType.BUFFER, make_analytics_probe(client, args.camera_id, last_frame), None)
 
     loop = GLib.MainLoop()
+    stalled = []
+
+    def check_stall():
+        # Only after the first frame: the first run spends minutes building the TensorRT engine.
+        if last_frame[0] is not None and time.monotonic() - last_frame[0] > STALL_SECONDS:
+            print(f"No frames for {STALL_SECONDS} s, camera lost. Exiting so it can reconnect.",
+                  file=sys.stderr)
+            stalled.append(True)
+            loop.quit()
+            return False
+        return True
+
+    GLib.timeout_add_seconds(5, check_stall)
     bus = pipeline.get_bus()
     bus.add_signal_watch()
     bus.connect("message", on_bus_message, loop)
@@ -259,6 +337,8 @@ def main():
         print("Stopping pipeline")
         pipeline.set_state(Gst.State.NULL)
         bus.remove_signal_watch()
+    if stalled:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

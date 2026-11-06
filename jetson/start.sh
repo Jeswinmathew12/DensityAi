@@ -6,11 +6,24 @@
 #   npm run serve                   # from the repo root
 #   jetson/start.sh --tracker       # extra flags go to occupancy_pipeline.py
 #
-# Env (all optional): CAMERA_DEVICE, DENSITY_PORT (default 8000), plus INGEST_TOKEN,
-# DENSITY_DB and DENSITY_TZ, which the backend and pipeline read themselves.
+# Env (all optional): CAMERA_URI (a Wi-Fi camera's rtsp:// address; without it the USB camera
+# is used), CAMERA_DEVICE, DENSITY_PORT (default 8000), plus INGEST_TOKEN, DENSITY_DB and
+# DENSITY_TZ, which the backend and pipeline read themselves.
+# Put them in /etc/densityai.env (one NAME=value per line, outside git because the camera
+# password is in CAMERA_URI). The boot service reads that file, and so does this script.
 # jetson/install-service.sh runs this at boot.
 set -u
 cd "$(dirname "$0")/.."
+
+# Settings already in the environment win, e.g. `CAMERA_URI= npm run serve` for the USB camera.
+# Read as plain NAME=value lines, not run as shell code, so passwords need no quoting.
+if [ -r /etc/densityai.env ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    name=${BASH_REMATCH[1]}
+    [ -n "${!name+set}" ] || export "$name=${BASH_REMATCH[2]}"
+  done < /etc/densityai.env
+fi
 
 PORT=${DENSITY_PORT:-8000}
 export DENSITY_API_URL="http://localhost:$PORT"
@@ -72,18 +85,27 @@ trap 'log "Backend exited, stopping"; FAILED=1; stop' USR1
 (while kill -0 "$BACKEND" 2>/dev/null; do sleep 2; done; kill -USR1 $$ 2>/dev/null) &
 WATCHER=$!
 
+if [ -n "${CAMERA_URI:-}" ]; then
+  log "Using the Wi-Fi camera at ${CAMERA_URI##*@}"
+fi
+
 waiting=
 while [ -z "$STOPPING" ]; do
-  dev=$(camera)
-  if [ -z "$dev" ] || [ ! -e "$dev" ]; then
-    [ -n "$waiting" ] || log "Waiting for a USB camera..."
-    waiting=1
-    sleep 2
-    continue
+  if [ -n "${CAMERA_URI:-}" ]; then
+    SOURCE=(--uri "$CAMERA_URI")
+  else
+    dev=$(camera)
+    if [ -z "$dev" ] || [ ! -e "$dev" ]; then
+      [ -n "$waiting" ] || log "Waiting for a USB camera..."
+      waiting=1
+      sleep 2
+      continue
+    fi
+    waiting=
+    SOURCE=(--device "$dev")
   fi
-  waiting=
   # System python3: that's where pyds and gi are installed, not backend/.venv.
-  python3 -u jetson/occupancy_pipeline.py --device "$dev" "${PIPELINE_FLAGS[@]}" "$@" \
+  python3 -u jetson/occupancy_pipeline.py "${SOURCE[@]}" "${PIPELINE_FLAGS[@]}" "$@" \
     > >(sed -u 's/^/[pipeline] /') 2>&1 &
   PIPELINE=$!
   wait "$PIPELINE"
