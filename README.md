@@ -208,7 +208,7 @@ Day-to-day commands:
 | `sudo systemctl disable --now densityai` | Stop it and keep it from starting at power-on. |
 | `sudo systemctl enable --now densityai` | Undo that: start it now and at every power-on. |
 
-Settings such as `INGEST_TOKEN` go in `/etc/densityai.env`, one `NAME=value` per line, then restart the service.
+Settings such as `INGEST_TOKEN` go in `/etc/densityai.env`, one `NAME=value` per line, then restart the service. For a Wi-Fi camera instead of USB, add `CAMERA_URI=rtsp://...` there (see [Step 12 of the runbook](docs/jetson-setup.md#step-12-wi-fi-camera-tapo-c120)).
 
 ### Running by hand: `npm run serve`
 
