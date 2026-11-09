@@ -7,7 +7,8 @@
 #   jetson/start.sh --tracker       # extra flags go to occupancy_pipeline.py
 #
 # Env (all optional): CAMERA_URI (a Wi-Fi camera's rtsp:// address; without it the USB camera
-# is used), CAMERA_DEVICE, DENSITY_PORT (default 8000), plus INGEST_TOKEN, DENSITY_DB and
+# is used), CAMERA_DEVICE, DENSITY_PORT (default 8000), ADMIN_PASSWORD (turns on the Admin page's
+# live camera view; frames stay in RAM on the Jetson), plus INGEST_TOKEN, DENSITY_DB and
 # DENSITY_TZ, which the backend and pipeline read themselves.
 # Put them in /etc/densityai.env (one NAME=value per line, outside git because the camera
 # password is in CAMERA_URI). The boot service reads that file, and so does this script.
@@ -38,6 +39,11 @@ camera() {
 # No window without a desktop session (SSH, or the boot service).
 PIPELINE_FLAGS=()
 [ -n "${DISPLAY:-}" ] || PIPELINE_FLAGS+=(--no-display)
+# Admin preview: the pipeline keeps its newest annotated frame in RAM, where the backend reads it.
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  export DENSITY_PREVIEW_DIR=${DENSITY_PREVIEW_DIR:-/dev/shm/densityai}
+  PIPELINE_FLAGS+=(--preview-dir "$DENSITY_PREVIEW_DIR")
+fi
 
 if curl -s -m 2 "$DENSITY_API_URL/api/health" >/dev/null; then
   log "Something is already running on port $PORT. Stop it first (if it's the boot service:"

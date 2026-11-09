@@ -330,6 +330,10 @@ Add one line, `CAMERA_URI=rtsp://USER:PASS@IP:554/stream1`, save, then `sudo sys
 
 If the camera drops off the Wi-Fi, the pipeline exits after 20 s without frames and `start.sh` reconnects. If the camera's IP changes (check Device Info again), update `CAMERA_URI`. Reserving the IP in the router stops that.
 
+**See what the camera sees (Admin page):** add `ADMIN_PASSWORD=...` to `/etc/densityai.env` (letters and numbers), then `sudo systemctl restart densityai`. Open the dashboard, go to **Admin** and enter the password. You get a live view at about 2 frames per second with a box around each person PeopleNet finds and the counting zone outlined. Only the newest frame is kept, in RAM (`/dev/shm/densityai`), and it's deleted when the pipeline stops. Without `ADMIN_PASSWORD` the preview is off. The dashboard is plain HTTP, so only use the Admin page on a network you trust.
+
+**People are counted when the bottom-centre of their box is inside the zone.** Someone close to the camera has a box cut off at the bottom of the frame, so the zone in `config_nvdsanalytics.txt` reaches the frame edges. If you draw a smaller zone, check on the Admin page that people near the camera still count.
+
 ## Debugging with gst-launch
 
 If the Python app misbehaves, run the same chain without any Python. It tells you whether the problem is the camera, the model or the app.

@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import time
 
@@ -90,3 +91,60 @@ def test_health_lists_cameras(client):
 
 def test_health_names_the_database(client):
     assert client.get("/api/health").json()["database"] == "test.db"
+
+
+ADMIN = {"X-Admin-Password": "admin-pass"}
+
+
+@pytest.fixture
+def preview_dir(tmp_path):
+    d = tmp_path / "preview"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def admin_client(tmp_path, db_path, preview_dir):
+    zones = tmp_path / "zones.json"
+    zones.write_text(json.dumps({
+        "zones": [{"id": "zone-a", "name": "Zone A", "capacity": 40, "fusion": "sum"}],
+        "cameras": [{"id": "cam-1", "zoneId": "zone-a"}],
+    }))
+    app = create_app(db_path=db_path, zones_path=zones, ingest_token=TOKEN,
+                     admin_password="admin-pass", preview_dir=preview_dir)
+    with TestClient(app) as c:
+        yield c
+
+
+def test_admin_is_off_without_a_password(client):
+    assert client.get("/api/admin/cameras", headers=ADMIN).status_code == 404
+    assert client.get("/api/admin/preview/cam-1", headers=ADMIN).status_code == 404
+
+
+def test_admin_rejects_a_wrong_or_missing_password(admin_client):
+    assert admin_client.get("/api/admin/cameras").status_code == 401
+    assert admin_client.get("/api/admin/cameras", headers={"X-Admin-Password": "nope"}).status_code == 401
+    assert admin_client.get("/api/admin/preview/cam-1").status_code == 401
+
+
+def test_admin_serves_a_fresh_preview(admin_client, preview_dir):
+    assert admin_client.get("/api/admin/cameras", headers=ADMIN).json() == [
+        {"id": "cam-1", "zoneId": "zone-a", "preview": False}]
+    assert admin_client.get("/api/admin/preview/cam-1", headers=ADMIN).status_code == 404
+
+    (preview_dir / "cam-1.jpg").write_bytes(b"\xff\xd8jpeg")
+    assert admin_client.get("/api/admin/cameras", headers=ADMIN).json()[0]["preview"] is True
+    r = admin_client.get("/api/admin/preview/cam-1", headers=ADMIN)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg" and r.headers["cache-control"] == "no-store"
+    assert r.content == b"\xff\xd8jpeg"
+
+
+def test_admin_ignores_stale_previews_and_unknown_cameras(admin_client, preview_dir):
+    frame = preview_dir / "cam-1.jpg"
+    frame.write_bytes(b"\xff\xd8jpeg")
+    old = time.time() - 60
+    os.utime(frame, (old, old))
+    assert admin_client.get("/api/admin/preview/cam-1", headers=ADMIN).status_code == 404
+    assert admin_client.get("/api/admin/preview/..%2Fsecret", headers=ADMIN).status_code == 404
+    assert admin_client.get("/api/admin/preview/cam-9", headers=ADMIN).status_code == 404

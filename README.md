@@ -58,7 +58,7 @@ Status thresholds are under 50% Available, 50-75% Moderate and over 75% Busy. Th
 public/index.html              HTML entry
 src/index.js                   React bootstrap
 src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
-src/pages/                     Dashboard, Zones, Trends, Settings pages
+src/pages/                     Dashboard, Zones, Trends, Settings, Admin pages
 src/App.css                    All styles + CSS variables
 src/hooks/useOccupancyData.js  Data-access layer: mock generators or live backend
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
@@ -98,11 +98,12 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
   - `GET /api/zones`: live zones, same shape as `generateZones()`
   - `GET /api/history`: last 24 local hours (trends, traffic) and today's stats and insights, built from stored samples. Same shapes as the mock generators, with `null` where there is no data, so a camera that was off shows as a gap, not 0.
   - `GET /api/health`: per-camera last-seen time and FPS
+  - `GET /api/admin/cameras`, `GET /api/admin/preview/{cameraId}`: the Admin page's camera list and newest annotated JPEG frame. Need `X-Admin-Password`; return 404 when `ADMIN_PASSWORD` is unset (admin off) or there's no frame from the last 5 s
   - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
   - `GET /`: the built dashboard, if a `build/` folder exists (see [Viewing on other devices](#viewing-on-other-devices))
 - **Configuration:**
   - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
-  - Env vars: `INGEST_TOKEN`, `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
+  - Env vars: `INGEST_TOKEN`, `ADMIN_PASSWORD` (turns on the Admin page), `DENSITY_PREVIEW_DIR` (where the pipeline keeps preview frames, default `/dev/shm/densityai`), `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
   - Frontend: `REACT_APP_API_URL`. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from.
 
 In live mode the dashboard loads `/api/history` on connect and every minute, so nothing on screen is simulated. A new database starts empty, and history is kept across camera and backend restarts.
@@ -257,7 +258,7 @@ cd ~/DensityAi/jetson
 python3 occupancy_pipeline.py
 ```
 
-The pipeline reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend. Only counts leave the Jetson, never frames. It prints the count and FPS about once a second, and Ctrl+C stops it cleanly. It runs with the system `python3`, where `pyds` and `gi` are installed, not `backend/.venv`.
+The pipeline reads the USB camera, counts people in the room region with PeopleNet and `nvdsanalytics`, and sends the counts to the backend. Only counts are sent, never frames. The exception is `--preview-dir`, which keeps the newest small annotated frame in RAM for the password-protected Admin page (`start.sh` turns it on when `ADMIN_PASSWORD` is set). It prints the count and FPS about once a second, and Ctrl+C stops it cleanly. It runs with the system `python3`, where `pyds` and `gi` are installed, not `backend/.venv`.
 
 **Don't run `simulator.py` at the same time.** It and the pipeline both post as `cam-1`, so their counts would get mixed together on the dashboard.
 
