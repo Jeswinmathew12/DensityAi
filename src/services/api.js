@@ -46,3 +46,28 @@ export function openLiveSocket({ onMessage, onStatus }) {
     ws.close();
   };
 }
+
+// Admin (camera preview). The password goes in a header on every request; nothing is cached.
+// Errors carry the HTTP status: 401 = wrong password, 404 = admin is off on the backend.
+async function adminFetch(path, password) {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { 'X-Admin-Password': password },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = new Error(`GET ${path} failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res;
+}
+
+// [{ id, zoneId, preview }] for every camera in backend/zones.json. Also the login check.
+export async function fetchAdminCameras(password) {
+  return (await adminFetch('/api/admin/cameras', password)).json();
+}
+
+// The camera's newest annotated frame as a JPEG Blob.
+export async function fetchPreviewFrame(cameraId, password) {
+  return (await adminFetch(`/api/admin/preview/${encodeURIComponent(cameraId)}`, password)).blob();
+}

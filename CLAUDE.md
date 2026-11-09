@@ -36,15 +36,16 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 public/index.html              HTML entry
 src/index.js                   React bootstrap
 src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
-src/pages/                     Dashboard, Zones, Trends, Settings pages
+src/pages/                     Dashboard, Zones, Trends, Settings, Admin pages
 src/App.css                    All styles + CSS variables
 src/hooks/useOccupancyData.js  Data-access layer: mock generators or live backend (REACT_APP_DATA_SOURCE)
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
-src/services/api.js            Backend URL + WebSocket client (only used by useOccupancyData)
+src/hooks/useAdmin.js          Admin login + live camera preview polling
+src/services/api.js            Backend URL + WebSocket client (only used by hooks in src/hooks/)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
-backend/app/main.py            FastAPI app: /api/ingest, /api/zones, /api/health, /ws/live
+backend/app/main.py            FastAPI app: /api/ingest, /api/zones, /api/health, /api/admin/*, /ws/live
 backend/app/processing.py      Pure logic: smoothing, multi-camera fusion, staleness, clock correction
 backend/app/db.py              SQLite schema + writes
 backend/zones.json             Zones (capacity, fusion) and which camera belongs to which zone
@@ -61,9 +62,9 @@ docs/jetson-setup.md           From-scratch Jetson runbook + known issues (sourc
 ## Data
 - `npm start` uses mock data from `src/utils/fakeDataGenerator.js`. `npm run start:live` takes live zone counts from the backend over `/ws/live` and trends, traffic, stats and insights from `/api/history` (refreshed every minute). Live mode never shows mock data: `null` in the history means no data and is shown as a gap or a dash.
 - Treat the shapes returned by the generator functions as the **data contract**. The backend must return the same shapes (tests in `backend/tests/test_api.py` check the zone keys). When adding a feature, extend the generator and the backend together rather than hardcoding data in components.
-- Keep data fetching isolated from rendering: only `useOccupancyData` talks to `src/services/api.js`; components just receive props.
+- Keep data fetching isolated from rendering: only hooks in `src/hooks/` (`useOccupancyData`, `useAdmin`) talk to `src/services/api.js`; components just receive props or call those hooks.
 - The backend sends counts and capacity, never a status. Busy/Available logic stays in `src/utils/status.js`.
-- The Jetson sends aggregated counts only (never frames). The ingest payload and API are documented in the README's "Backend" section; the Jetson setup runbook is `docs/jetson-setup.md` (`occupancy-tracker-plan.md` has the background).
+- The Jetson sends aggregated counts only (never frames). One exception: the password-protected Admin page's live camera view. The pipeline keeps only its newest small annotated frame in RAM (`/dev/shm`), the backend serves it only with `ADMIN_PASSWORD`, and it is off when that is unset. Never store frames on disk or send them anywhere else. The ingest payload and API are documented in the README's "Backend" section; the Jetson setup runbook is `docs/jetson-setup.md` (`occupancy-tracker-plan.md` has the background).
 
 ## Design guidelines
 - Light theme, left sidebar nav, card-based layout. Visual references: "Occupancy Insight" style dashboards (KPI cards on top, trend chart + zone table, bidirectional in/out traffic chart, insights panel).
@@ -79,7 +80,7 @@ docs/jetson-setup.md           From-scratch Jetson runbook + known issues (sourc
 - Every `nvvideoconvert` in DeepStream code needs `copy-hw=2` (DeepStream 7.1 on JetPack 6.2.x crashes after ~2 minutes without it).
 - DeepStream config files (nvinfer, nvdsanalytics) use `#` comments only; `;` comments break parsing.
 - `jetson/occupancy_pipeline.py` runs with the system `python3` (where `pyds` and `gi` are installed), not `backend/.venv`.
-- Never commit secrets, API keys, or `.env` files. The ingest token comes from the `INGEST_TOKEN` env var.
+- Never commit secrets, API keys, or `.env` files. The ingest token comes from the `INGEST_TOKEN` env var, the admin password from `ADMIN_PASSWORD`.
 
 ## Working style
 - Make small, focused changes and explain what changed and why.

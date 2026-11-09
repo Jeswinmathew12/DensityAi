@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Users, BarChart3, Settings } from 'lucide-react';
+import { LayoutDashboard, Users, BarChart3, Settings, Lock } from 'lucide-react';
 import useOccupancyData from './hooks/useOccupancyData';
 import { API_URL } from './services/api';
 import useHashRoute from './hooks/useHashRoute';
@@ -7,12 +7,14 @@ import DashboardPage from './pages/DashboardPage';
 import ZonesPage from './pages/ZonesPage';
 import TrendsPage from './pages/TrendsPage';
 import SettingsPage from './pages/SettingsPage';
+import AdminPage from './pages/AdminPage';
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, page: DashboardPage },
   { id: 'zones', label: 'Zones', icon: Users, page: ZonesPage },
   { id: 'trends', label: 'Trends', icon: BarChart3, page: TrendsPage },
   { id: 'settings', label: 'Settings', icon: Settings, page: SettingsPage },
+  { id: 'admin', label: 'Admin', icon: Lock, page: AdminPage },
 ];
 
 export default function App() {

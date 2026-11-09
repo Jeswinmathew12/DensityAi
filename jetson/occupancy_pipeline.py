@@ -7,9 +7,12 @@ USB or Wi-Fi (RTSP) camera -> PeopleNet -> [tracker] -> nvdsanalytics (ROI count
     python3 jetson/occupancy_pipeline.py --uri rtsp://user:pass@192.168.1.50:554/stream1
     python3 jetson/occupancy_pipeline.py --no-display          # headless (SSH, systemd)
     python3 jetson/occupancy_pipeline.py --tracker             # needed for line crossing
+    python3 jetson/occupancy_pipeline.py --preview-dir /dev/shm/densityai   # admin preview
 
 Run with the system python3 (where pyds and gi are installed), not backend/.venv.
-Only counts leave the Jetson, never frames.
+Only counts are sent to the backend. With --preview-dir, the newest frame (small, with boxes
+and the ROI drawn) is also kept in RAM for the password-protected Admin page; it is
+overwritten about twice a second, never stored on disk and deleted on exit.
 
 Metadata parsing follows NVIDIA's deepstream_python_apps v1.2.0
 apps/deepstream-nvdsanalytics, USB input follows apps/deepstream-test1-usbcam and RTSP
@@ -44,6 +47,8 @@ ENTRY_NAME, EXIT_NAME = "Entry", "Exit"
 # frame arrives for this long, exit so start.sh restarts the pipeline and reconnects.
 STALL_SECONDS = 20
 RTSP_LATENCY_MS = 200
+# Admin preview: small and slow on purpose. It is for checking the camera and the zones.
+PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_FPS = 640, 360, 2
 
 
 class FpsCounter:
@@ -202,7 +207,51 @@ def make_uri_source(pipeline, uri, conv_in):
     return source
 
 
-def build_pipeline(args):
+def make_preview_branch(preview_path):
+    """Elements that turn annotated frames into a JPEG at preview_path, PREVIEW_FPS times a second.
+
+    The file is replaced atomically, so the backend never reads half a frame.
+    """
+    queue = make("queue", "preview-queue")
+    # Never hold up counting: keep only the newest frame and drop the rest.
+    queue.set_property("leaky", 2)
+    queue.set_property("max-size-buffers", 1)
+    conv = make_nvvideoconvert("nvconv-preview")
+    caps = make_caps("preview-caps",
+                     f"video/x-raw,format=I420,width={PREVIEW_WIDTH},height={PREVIEW_HEIGHT}")
+    rate = make("videorate", "preview-rate")
+    rate.set_property("drop-only", True)
+    rate.set_property("max-rate", PREVIEW_FPS)
+    jpeg = make("jpegenc", "preview-jpeg")
+    jpeg.set_property("quality", 75)
+    appsink = make("appsink", "preview-sink")
+    appsink.set_property("emit-signals", True)
+    appsink.set_property("max-buffers", 1)
+    appsink.set_property("drop", True)
+    appsink.set_property("sync", False)
+    tmp_path = preview_path + ".tmp"
+
+    def on_new_sample(sink):
+        sample = sink.emit("pull-sample")
+        if sample:
+            buf = sample.get_buffer()
+            ok, info = buf.map(Gst.MapFlags.READ)
+            if ok:
+                try:
+                    with open(tmp_path, "wb") as f:
+                        f.write(info.data)
+                    os.replace(tmp_path, preview_path)
+                except OSError as e:
+                    print(f"Could not write the preview frame: {e}", file=sys.stderr)
+                finally:
+                    buf.unmap(info)
+        return Gst.FlowReturn.OK
+
+    appsink.connect("new-sample", on_new_sample)
+    return [queue, conv, caps, rate, jpeg, appsink]
+
+
+def build_pipeline(args, preview_path=None):
     pipeline = Gst.Pipeline()
 
     conv_in = make_nvvideoconvert("nvconv-in")
@@ -265,9 +314,23 @@ def build_pipeline(args):
     if caps_nvmm.get_static_pad("src").link(sinkpad) != Gst.PadLinkReturn.OK:
         sys.exit("Could not link the camera chain to nvstreammux")
 
+    # With a preview, a tee after the OSD feeds both the sink and the preview branch.
+    preview = []
+    if preview_path:
+        tee = make("tee", "preview-tee")
+        display_queue = make("queue", "display-queue")
+        preview = make_preview_branch(preview_path)
+        rest[-1:] = [tee, display_queue, sink]
+        for element in [tee, display_queue] + preview:
+            pipeline.add(element)
+
     for a, b in zip([streammux] + rest, rest):
         if not a.link(b):
             sys.exit(f"Could not link {a.get_name()} to {b.get_name()}")
+    if preview_path:
+        for a, b in zip([tee] + preview, preview):
+            if not a.link(b):
+                sys.exit(f"Could not link {a.get_name()} to {b.get_name()}")
 
     return pipeline, analytics
 
@@ -285,6 +348,8 @@ def parse_args():
                    help="nvdsanalytics config (ROI and line crossing)")
     p.add_argument("--tracker", action="store_true", help="add nvtracker (needed for line crossing)")
     p.add_argument("--no-display", action="store_true", help="use fakesink instead of a window")
+    p.add_argument("--preview-dir", help="keep the newest annotated frame in this directory for the "
+                   "Admin page (use a RAM folder such as /dev/shm/densityai)")
     return p.parse_args()
 
 
@@ -300,8 +365,14 @@ def main():
     print(f"Sending counts for {args.camera_id} to {api_url}")
     print(f"Camera: {redact(args.uri) if args.uri else args.device}")
 
+    preview_path = None
+    if args.preview_dir:
+        os.makedirs(args.preview_dir, mode=0o700, exist_ok=True)
+        preview_path = os.path.join(args.preview_dir, f"{args.camera_id}.jpg")
+        print(f"Admin preview: {preview_path}")
+
     Gst.init(None)
-    pipeline, analytics = build_pipeline(args)
+    pipeline, analytics = build_pipeline(args, preview_path)
 
     last_frame = [None]  # monotonic time of the newest frame; None until the first one
     analytics.get_static_pad("src").add_probe(
@@ -337,6 +408,12 @@ def main():
         print("Stopping pipeline")
         pipeline.set_state(Gst.State.NULL)
         bus.remove_signal_watch()
+        if preview_path:
+            for path in (preview_path, preview_path + ".tmp"):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
     if stalled:
         sys.exit(1)
 

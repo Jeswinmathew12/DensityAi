@@ -4,6 +4,7 @@ Run from the repo root (or use `npm run backend`):
     uvicorn backend.app.main:create_app --factory --reload --reload-dir backend --port 8000
 """
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -22,6 +23,10 @@ from . import db, history
 from .processing import STALE_AFTER_S, LiveState, correct_ts
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+# Where jetson/occupancy_pipeline.py --preview-dir keeps each camera's newest frame (in RAM).
+DEFAULT_PREVIEW_DIR = "/dev/shm/densityai"
+# A preview frame older than this means the pipeline is not running (or has no preview).
+PREVIEW_FRESH_S = 5
 log = logging.getLogger("uvicorn.error")
 
 
@@ -37,10 +42,14 @@ class Sample(BaseModel):
     fps: Optional[float] = None
 
 
-def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None):
+def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None,
+               admin_password=None, preview_dir=None):
     db_path = db_path or os.environ.get("DENSITY_DB") or BACKEND_DIR / "density.db"
     zones_path = zones_path or BACKEND_DIR / "zones.json"
     ingest_token = ingest_token or os.environ.get("INGEST_TOKEN")
+    # Admin pages (camera preview) are off unless a password is set.
+    admin_password = admin_password or os.environ.get("ADMIN_PASSWORD")
+    preview_dir = Path(preview_dir or os.environ.get("DENSITY_PREVIEW_DIR") or DEFAULT_PREVIEW_DIR)
     # History is grouped into the room's local hours, not UTC.
     tz = ZoneInfo(tz or os.environ.get("DENSITY_TZ") or "America/New_York")
 
@@ -127,6 +136,45 @@ def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None):
             # Lets the simulator and reset script see which history this backend is writing.
             "database": Path(db_path).name,
         }
+
+    def require_admin(password):
+        if not admin_password:
+            raise HTTPException(404, "Admin is off. Set ADMIN_PASSWORD in /etc/densityai.env.")
+        if not password or not hmac.compare_digest(password.encode(), admin_password.encode()):
+            raise HTTPException(401, "Wrong admin password")
+
+    def fresh_preview(camera_id):
+        """Path of the camera's newest preview frame, or None if there is no recent one."""
+        path = preview_dir / f"{camera_id}.jpg"
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            return None
+        return path if age <= PREVIEW_FRESH_S else None
+
+    @app.get("/api/admin/cameras")
+    async def admin_cameras(x_admin_password: Optional[str] = Header(None)):
+        """Cameras from zones.json, and whether each has a live preview. Doubles as the login check."""
+        require_admin(x_admin_password)
+        return [
+            {"id": cam_id, "zoneId": zone_id, "preview": fresh_preview(cam_id) is not None}
+            for cam_id, zone_id in state.camera_zone.items()
+        ]
+
+    @app.get("/api/admin/preview/{camera_id}")
+    async def admin_preview(camera_id: str, x_admin_password: Optional[str] = Header(None)):
+        require_admin(x_admin_password)
+        # Only known camera ids, so the name can't point outside preview_dir.
+        if camera_id not in state.camera_zone:
+            raise HTTPException(404, "Unknown camera")
+        path = fresh_preview(camera_id)
+        if path is None:
+            raise HTTPException(404, "No live preview for this camera")
+        try:
+            data = path.read_bytes()
+        except OSError:
+            raise HTTPException(404, "No live preview for this camera")
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.websocket("/ws/live")
     async def live(ws: WebSocket):
