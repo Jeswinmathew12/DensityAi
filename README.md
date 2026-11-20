@@ -11,11 +11,14 @@ The main goal of the UI is to answer **"how busy is it right now?"** at a glance
 ### System overview
 
 ```
-USB camera -> Jetson Orin Nano, JetPack 6.2.1 + DeepStream 7.1 (PeopleNet + tracker + line-crossing analytics)
-           -> SQLite -> FastAPI REST/WebSocket -> React dashboard (this repo)
+Camera -> Jetson Orin Nano, JetPack 6.2.1 + DeepStream 7.1 (PeopleNet + tracker + nvdsanalytics)
+       -> collector (backend/app/collector.py, port 8001): turns counts into rows in PostgreSQL
+       -> PostgreSQL `events` table (TimescaleDB hypertable if installed)
+       -> web service (backend/app/main.py, port 8000): REST API + live WebSocket, reads only the database
+       -> React dashboard (this repo): talks only to the web service, never to the Jetson
 ```
 
-The Jetson pipeline is planned in [occupancy-tracker-plan.md](occupancy-tracker-plan.md). The backend in `backend/` receives counts, cleans them up, stores them and pushes live zone counts to the dashboard. Until the Jetson pipeline is running, `backend/simulator.py` stands in for it. The dashboard can also run on its own with mock data.
+The Jetson pipeline is planned in [occupancy-tracker-plan.md](occupancy-tracker-plan.md). The collector and web service are two separate programs that share only the database, so in a real store the Jetson stays on site and the rest can run on a server. Until the Jetson pipeline is running, `backend/simulator.py` stands in for it. The dashboard can also run on its own with mock data.
 
 ### Milestones
 
@@ -26,7 +29,9 @@ The Jetson pipeline is planned in [occupancy-tracker-plan.md](occupancy-tracker-
 
 ### Features
 
-- Four pages via the sidebar: Dashboard, Zones, Trends, Settings
+- Pages via the sidebar: Dashboard, Zones, Trends, Store insights, System, Settings, Admin
+- Store insights: busiest-times heatmap, visitors by weekday and hour, where shoppers go (pie), how long they stay (pie), zone scorecard, crowding alerts and recommended actions. Comes with a sample store (`npm run mock-store`)
+- System: each hop from camera to dashboard with a live status, plus the REST API
 - Live occupancy count with a status color: green = Available, blue = Moderate, red = Busy
 - 24-hour occupancy trend
 - Per-zone table with count, capacity and status
@@ -66,8 +71,14 @@ src/services/api.js            Backend URL + WebSocket client
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
 src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
-backend/                       FastAPI + SQLite backend, simulator, tests
+backend/app/collector.py       Collector: takes the Jetson's counts, writes events to PostgreSQL
+backend/app/main.py            Web service: REST API + live WebSocket, reads PostgreSQL
+backend/app/analytics.py       Store insights (busiest times, dwell, recommendations) from events
+backend/app/db.py              PostgreSQL schema (sites, zones, cameras, events) and queries
+backend/mock_store.py          Weeks of sample data for a fictional store
+backend/                       Also the simulator, setup scripts and tests
 docs/jetson-setup.md           Jetson setup runbook and known issues
+docs/demo-day.md               Design Day talking points (business plan, future plans)
 jetson/setup_peoplenet.sh      Downloads PeopleNet and writes its nvinfer config
 jetson/occupancy_pipeline.py   DeepStream pipeline: camera -> PeopleNet -> ROI count -> backend
 jetson/config_nvdsanalytics.txt ROI and line-crossing config for the pipeline
@@ -81,20 +92,28 @@ The shapes returned by `src/utils/fakeDataGenerator.js` are the data contract, a
 ## Backend
 
 ```
-Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLite --/ws/live--> dashboard
+Jetson probe / simulator --POST /api/ingest--> collector :8001 --> PostgreSQL events
+                                                                     |
+dashboard <--REST + /ws/live-- web service :8000 <--reads every second+
 ```
 
+- **Database:** PostgreSQL (`npm run db:setup` installs it; `-- --timescale` adds TimescaleDB). One simple `events` table holds everything: `time, site_id, zone_id, camera_id, kind, value, detail`, where `kind` is `occupancy` (people in the zone), `entry`, `exit` (people crossing the line), `dwell` (seconds one person spent in the zone) or `alert` (zone crowded). `sites`, `zones` and `cameras` describe where events come from. `DATABASE_URL` picks the database (default `postgresql:///densityai`, the local socket with no password).
 - **What the Jetson sends:** numbers only, never images. One JSON object per camera per second, or an array of them:
   ```json
   { "cameraId": "cam-1", "ts": 1759500000.0, "sentAt": 1759500000.2,
     "occupancy": 12, "entriesCum": 140, "exitsCum": 128, "fps": 27.4 }
   ```
-  `occupancy` is the `nvdsanalytics` ROI count, and `entriesCum`/`exitsCum` are its cumulative line-crossing counts. `ts` is when the frame was counted and `sentAt` is when the request went out. The backend uses the gap to correct for the Jetson's clock being wrong. If `INGEST_TOKEN` is set, requests must send it as `X-Ingest-Token`.
+  `occupancy` is the `nvdsanalytics` ROI count, and `entriesCum`/`exitsCum` are its cumulative line-crossing counts (the collector turns them into `entry`/`exit` events). With `--tracker`, an optional `"dwell": [42.5, 7.0]` lists how many seconds each person who just left the zone spent in it. `ts` is when the frame was counted and `sentAt` is when the request went out. The backend uses the gap to correct for the Jetson's clock being wrong. If `INGEST_TOKEN` is set, requests must send it as `X-Ingest-Token`.
+- **Collector** (`POST /api/ingest`, `POST /api/events` for ready-made events, `GET /api/health`): stores every sample, and writes an `alert` event when a zone reaches its `alertAt` level in `backend/zones.json` (at most once per 10 minutes).
 - **Processing:**
   - The live count is the median of each camera's last 5 samples, which hides flicker and brief occlusions.
   - Cameras are combined per zone, using `"fusion": "sum"` (separate areas) or `"max"` (overlapping views) in `backend/zones.json`.
   - A zone is marked `stale` (shown as "Offline") when its cameras stop reporting for 10 seconds.
-- **Endpoints:**
+- **Web service endpoints** (interactive docs at http://localhost:8000/docs):
+  - `GET /api/sites`: every site (the live camera site, sample stores) with its zones
+  - `GET /api/sites/{id}/analytics?days=28`: Store insights, same shape as `generateStoreAnalytics()`
+  - `GET /api/sites/{id}/events?kind=&zone=&since=&until=&limit=`: raw events, newest first
+  - `GET /api/system`: health of each hop, for the System page
   - `GET /api/zones`: live zones, same shape as `generateZones()`
   - `GET /api/history`: last 24 local hours (trends, traffic) and today's stats and insights, built from stored samples. Same shapes as the mock generators, with `null` where there is no data, so a camera that was off shows as a gap, not 0.
   - `GET /api/health`: per-camera last-seen time and FPS
@@ -102,8 +121,8 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
   - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
   - `GET /`: the built dashboard, if a `build/` folder exists (see [Viewing on other devices](#viewing-on-other-devices))
 - **Configuration:**
-  - `backend/zones.json`: zones, capacities (usable seats), and which camera is in which zone
-  - Env vars: `INGEST_TOKEN`, `ADMIN_PASSWORD` (turns on the Admin page), `DENSITY_PREVIEW_DIR` (where the pipeline keeps preview frames, default `/dev/shm/densityai`), `DENSITY_DB` (default `backend/density.db`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
+  - `backend/zones.json`: the live site, its zones, capacities (usable seats), optional `alertAt`, and which camera is in which zone. The collector copies it into the database at startup
+  - Env vars: `INGEST_TOKEN`, `ADMIN_PASSWORD` (turns on the Admin page), `DENSITY_PREVIEW_DIR` (where the pipeline keeps preview frames, default `/dev/shm/densityai`), `DATABASE_URL` (default `postgresql:///densityai`), `DENSITY_STATIC` (dashboard build folder, default `build/`), `DENSITY_TZ` (time zone for hourly history, default `America/New_York`)
   - Frontend: `REACT_APP_API_URL`, for the dev server only. If unset, the dev server uses `http://localhost:8000` and a production build uses the address the page was loaded from. `npm run serve` always builds with it unset (and warns if a `.env` file sets it), so the dashboard works on whatever network the Jetson is on.
 
 In live mode the dashboard loads `/api/history` on connect and every minute, so nothing on screen is simulated. A new database starts empty, and history is kept across camera and backend restarts.
@@ -128,18 +147,21 @@ Open http://localhost:3000. Live counts drift with new mock data every 3 seconds
 
 ### With the backend (live data)
 
-Needs Python 3.9+. Use three terminals:
+Needs Python 3.9+ and PostgreSQL. Use three terminals:
 
 ```bash
-npm run backend:setup   # once: creates backend/.venv and installs FastAPI etc.
-npm run backend:sim     # terminal 1: API at http://localhost:8000, history in backend/sim.db
+npm run db:setup        # once: installs PostgreSQL (Ubuntu/Jetson) and creates your database role
+npm run backend:setup   # once: creates backend/.venv and installs FastAPI, psycopg etc.
+npm run backend:sim     # terminal 1: collector :8001 + web service :8000, database densityai_sim
 npm run simulate        # terminal 2: fake Jetson posting counts every second
-npm run start:live      # terminal 3: dashboard using the backend
+npm run start:live      # terminal 3: dashboard using the web service
 ```
 
-With the real Jetson, use `npm run backend` instead of `backend:sim`. Real history lives in `backend/density.db` and simulated history in `backend/sim.db`, so the two never mix. The simulator refuses to post to a backend that is writing `density.db`.
+With the real Jetson, use `npm run backend` instead of `backend:sim`. Real history lives in the `densityai` database and simulated history in `densityai_sim` (created automatically), so the two never mix. The simulator refuses to post to a collector that is writing `densityai`.
 
-To start history over (for example before a demo), stop the backend and run `npm run backend:reset`. It moves `backend/density.db` into `backend/backups/` rather than deleting it. Use `npm run backend:reset -- backend/sim.db` for the simulator's history.
+For the Store insights page, fill the database with six weeks of a sample store: `npm run mock-store` (run it again any time; it replaces the previous sample data and ends at the current time). It is its own site, labeled as sample data, so it never mixes with the camera's counts.
+
+To start the live camera's history over (for example before a demo), run `npm run backend:reset`. It moves the live site's events into a backup table (`events_backup_<date>`) rather than deleting them, and leaves the sample store alone.
 
 Simulator options: `npm run simulate -- --hour 14` starts at 2 PM, `--speed 60` fast-forwards a minute per second, and `--dropout 0.02` makes cameras go silent now and then to test the offline state. On Windows, set `REACT_APP_DATA_SOURCE=live` in a `.env.local` file and use `npm start`, since the `start:live` script uses macOS/Linux syntax.
 
@@ -169,11 +191,13 @@ Then on a phone or laptop, open `http://<one-of-those-ips>:8000` (http, not http
 | `npm run build` | Production build into `build/` (run this to check for errors) |
 | `npm run build:live` | Production build using the backend, for serving from port 8000 |
 | `npm test` | Run tests |
-| `npm run backend` | Backend at http://localhost:8000, reloads on changes |
-| `npm run serve` | Jetson: build if needed, backend on port 8000 for all devices, pipeline with auto-restart |
-| `npm run backend:sim` | Backend using `backend/sim.db`, for the simulator |
+| `npm run db:setup` | Install PostgreSQL and create your database role (`-- --timescale` adds TimescaleDB) |
+| `npm run backend` | Collector (:8001) and web service (:8000), reload on changes |
+| `npm run serve` | Jetson: build if needed, collector + web service for all devices, pipeline with auto-restart |
+| `npm run backend:sim` | Same, using the `densityai_sim` database, for the simulator |
+| `npm run mock-store` | Six weeks of sample-store data for Store insights (`-- --weeks 10`) |
 | `npm run simulate` | Fake Jetson (`npm run simulate -- --help` for options) |
-| `npm run backend:reset` | Move `backend/density.db` to `backend/backups/` so history starts empty |
+| `npm run backend:reset` | Move the live site's events to a backup table so history starts empty |
 | `npm run backend:test` | Backend tests |
 
 ## How to run on the Jetson
@@ -189,7 +213,7 @@ The Jetson runs DensityAI as a background service called `densityai`. It starts 
    - on the Jetson: `http://localhost:8000`
    - on a laptop or phone: one of the addresses the service prints at startup (`journalctl -u densityai | grep start`), or `http://<ip>:8000` with an IP from `hostname -I`. Which one works depends on the network; see [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
 
-The service runs the backend and the camera pipeline together, restarts the pipeline if the camera is unplugged or it crashes, and waits for the clock to sync after a power loss so counts aren't stamped 1970. It shows no camera window. Stopping it stops the dashboard too; history is kept in `backend/density.db`, and the time it was off shows as a gap.
+The service runs the backend and the camera pipeline together, restarts the pipeline if the camera is unplugged or it crashes, and waits for the clock to sync after a power loss so counts aren't stamped 1970. It shows no camera window. Stopping it stops the dashboard too; history is kept in PostgreSQL, and the time it was off shows as a gap.
 
 Install it once (already done on our Jetson):
 
@@ -264,11 +288,11 @@ rm -rf build && sudo systemctl restart densityai                # or with the se
 
 Stop the service first (`sudo systemctl stop densityai`), then run each command in its own terminal on the Jetson, in this order.
 
-**1. Backend**
+**1. Collector and web service** (PostgreSQL itself runs as a system service)
 
 ```bash
 cd ~/DensityAi
-backend/.venv/bin/uvicorn backend.app.main:create_app --factory --host 0.0.0.0 --port 8000
+npm run backend
 ```
 
 **2. Frontend**, which opens at http://localhost:3000 in the Jetson's browser
@@ -305,10 +329,10 @@ REACT_APP_API_URL=http://<jetson-address>:8000 npm run start:live
 | `--device` | `/dev/video0` | V4L2 camera device |
 | `--infer-config` | `~/models/peoplenet/config_infer_peoplenet.txt` | PeopleNet `nvinfer` config |
 | `--analytics-config` | `jetson/config_nvdsanalytics.txt` | ROI and line-crossing config |
-| `--tracker` | off | Adds `nvtracker`. Needed before enabling line crossing. |
+| `--tracker` | off | Adds `nvtracker`. Needed for line crossing and dwell time. |
 | `--no-display` | off | Uses `fakesink` instead of a window, for SSH or systemd runs |
 
-The pipeline sends to `http://localhost:8000` by default. Set `DENSITY_API_URL` to change that, and `INGEST_TOKEN` if the backend has one set.
+The pipeline sends to the collector at `http://localhost:8001` by default. Set `DENSITY_COLLECTOR_URL` to change that, and `INGEST_TOKEN` if the collector has one set. With `--tracker` it also measures how long each person stays in the zone (dwell time) and sends that with the counts.
 
 - **Demo 1 is ROI-only.** Line crossing is disabled (`enable=0`) in `config_nvdsanalytics.txt`, so entries and exits are sent as 0. Turn it on and run with `--tracker` for Demo 2.
 - **Coordinates are scene-specific.** The ROI covers the whole frame for now. Re-derive it from a screenshot once the camera is mounted. `config-width` and `config-height` must stay equal to the 1280x720 stream resolution.

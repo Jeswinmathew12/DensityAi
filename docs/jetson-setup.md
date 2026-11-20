@@ -212,20 +212,24 @@ numpy 2.x is not supported. If you see 2.x, run `pip3 install "numpy<2"`.
 ```bash
 sudo apt install -y python3.10-venv python3-pip
 git clone https://github.com/Jeswinmathew12/DensityAi.git && cd DensityAi
-git checkout dashboard
 python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
+npm run db:setup
 ```
 
-Without the `python3.10-venv` package, creating the venv fails.
+Without the `python3.10-venv` package, creating the venv fails. `npm run db:setup` installs PostgreSQL 14 from Ubuntu, starts it at boot, and creates a database role for your account, so nothing needs a password. Add `-- --timescale` to also install TimescaleDB (optional; it is tuned to use 1 GB so DeepStream keeps its memory).
 
-Run the backend:
+Check the database: `psql densityai -c 'select 1'` prints `1`.
+
+Run the collector and web service:
 
 ```bash
-backend/.venv/bin/uvicorn backend.app.main:create_app --factory --port 8000
+npm run backend
 ```
 
-Add `--host 0.0.0.0` only if another device needs to reach it. The pipeline on the Jetson posts to `localhost`, so the default is enough for that. If you set `INGEST_TOKEN` on the backend, set the same value for the pipeline.
+The collector (port 8001) receives the pipeline's counts and writes them to PostgreSQL. The web service (port 8000) reads them for the dashboard. If you set `INGEST_TOKEN` on the collector, set the same value for the pipeline.
+
+Optional, for the Store insights page: `npm run mock-store` writes six weeks of a sample store.
 
 Check it from a second terminal:
 
@@ -237,10 +241,10 @@ curl http://localhost:8000/api/health
 
 ## Step 9: Run the pipeline
 
-With the backend running, in another terminal and from the repo root:
+With the collector and web service running, in another terminal and from the repo root:
 
 ```bash
-export DENSITY_API_URL=http://localhost:8000     # the default
+export DENSITY_COLLECTOR_URL=http://localhost:8001   # the default
 export INGEST_TOKEN=...                          # only if the backend has one
 python3 jetson/occupancy_pipeline.py             # add --no-display over SSH
 ```
@@ -416,8 +420,8 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! \
 ### 8. Stale simulator data in the database
 
 - **Symptom:** history for Demo 2 includes fake rows.
-- **Cause:** `backend/density.db` holds simulator rows from testing.
-- **Fix:** stop the backend and delete `backend/density.db` before collecting real data. It is recreated on the next start.
+- **Cause:** the `densityai` database holds simulator rows from testing.
+- **Fix:** run `npm run backend:reset` before collecting real data. It moves the live site's events into a backup table. (The simulator normally goes to `densityai_sim` via `npm run backend:sim`.)
 
 ### 9. Dashboard stuck on "Connecting to the backend at …"
 
@@ -431,5 +435,5 @@ These exist only on the Jetson, and this runbook rebuilds them:
 
 - The PeopleNet model files and the TensorRT engine in `~/models/peoplenet` (Step 6)
 - The DeepStream install and `pyds` (Steps 4 and 7)
-- `backend/.venv` and `backend/density.db` (Step 8)
+- `backend/.venv`, PostgreSQL and its `densityai` database (Step 8)
 - The power mode and the clock fix (Steps 2 and 3)
