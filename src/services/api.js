@@ -1,13 +1,29 @@
-// Talks to the FastAPI backend in backend/. Components never import this directly;
-// useOccupancyData is the only consumer.
+// Talks to the DensityAI web service (backend/app/main.py), which reads the PostgreSQL database
+// the collector fills. The dashboard never talks to the Jetson directly. Components never import
+// this; only hooks in src/hooks/ do.
 
-// REACT_APP_API_URL wins if set. A production build (served by the backend itself) talks to
-// whatever address it was loaded from, so it works from any device. The dev server defaults
-// to the local backend.
+// REACT_APP_API_URL wins if set (meant for the dev server). A production build (served by the
+// backend itself) talks to whatever address it was loaded from, so it works from any device and
+// network. The dev server defaults to the local backend.
 export const API_URL =
   process.env.REACT_APP_API_URL ||
   (process.env.NODE_ENV === 'production' ? window.location.origin : 'http://localhost:8000');
 const WS_URL = API_URL.replace(/^http/, 'ws');
+
+// A production build with a fixed address baked in breaks as soon as the Jetson changes networks.
+if (process.env.NODE_ENV === 'production' && process.env.REACT_APP_API_URL) {
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(API_URL).origin === window.location.origin;
+  } catch {}
+  if (!sameOrigin) {
+    console.warn(
+      `This dashboard was built with REACT_APP_API_URL=${API_URL} but opened at ` +
+        `${window.location.origin}, so it may not reach the backend. ` +
+        'Rebuild it on the Jetson with: rm -rf build && npm run serve'
+    );
+  }
+}
 
 // Trends, traffic, stats and insights built from stored samples. Same shapes as the mock
 // generators, with null wherever there is no data.
@@ -71,3 +87,20 @@ export async function fetchAdminCameras(password) {
 export async function fetchPreviewFrame(cameraId, password) {
   return (await adminFetch(`/api/admin/preview/${encodeURIComponent(cameraId)}`, password)).blob();
 }
+
+async function getJson(path) {
+  const res = await fetch(`${API_URL}${path}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return res.json();
+}
+
+// [{ id, name, kind: 'live' | 'sample', tz, live, zones, cameras }] for every site in the database.
+export const fetchSites = () => getJson('/api/sites');
+
+// Busiest hours and days, zone reach, dwell, alerts and recommendations for one site.
+// Same shape as generateStoreAnalytics().
+export const fetchAnalytics = (siteId, days) =>
+  getJson(`/api/sites/${encodeURIComponent(siteId)}/analytics?days=${days}`);
+
+// Health of each hop from camera to dashboard. Same shape as generateSystemStatus().
+export const fetchSystem = () => getJson('/api/system');

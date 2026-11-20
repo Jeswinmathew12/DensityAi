@@ -1,12 +1,12 @@
-"""Fake Jetson: posts counts to the backend exactly like the real DeepStream probe will.
+"""Fake Jetson: posts counts to the collector exactly like the real DeepStream probe does.
 
     python backend/simulator.py                  # every camera in zones.json, real time
     python backend/simulator.py --hour 14        # start the simulated day at 2 PM
     python backend/simulator.py --speed 60       # one simulated minute per real second
     python backend/simulator.py --dropout 0.02   # 2% chance per second of a camera going silent
 
-Run it against `npm run backend:sim`, which keeps simulated counts in backend/sim.db. It refuses
-to post into the real history (backend/density.db) unless you pass --allow-real-db.
+Run it against `npm run backend:sim`, which keeps simulated counts in the densityai_sim database.
+It refuses to post into the real history (database densityai) unless you pass --allow-real-db.
 
 Stdlib only, so it runs without installing anything.
 """
@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 ZONES_PATH = Path(__file__).resolve().parent / "zones.json"
-REAL_DB = "density.db"
+REAL_DB = "densityai"
 
 
 def day_curve(hour):
@@ -51,6 +51,7 @@ class Camera:
         self.entries_cum = self.true  # everyone already inside "walked in" before we started
         self.exits_cum = 0
         self.silent_until = 0
+        self.dwell = []  # seconds each person who left spent inside, sent with the next sample
 
     def step(self, hour, dt):
         """Advance `dt` simulated seconds. Returns the ROI count the detector would report."""
@@ -64,6 +65,7 @@ class Camera:
         self.true += entries - exits
         self.entries_cum += entries
         self.exits_cum += exits
+        self.dwell += [round(random.lognormvariate(math.log(90), 0.7), 1) for _ in range(exits)]
 
         if random.random() < 0.03:  # occasional occlusion: a few people briefly hidden
             return max(0, self.true - random.randint(2, 4))
@@ -81,7 +83,7 @@ def post(url, token, sample):
 
 
 def wait_for_backend(url):
-    """Block until the backend answers, then return its /api/health."""
+    """Block until the collector answers, then return its /api/health."""
     warned = False
     while True:
         try:
@@ -96,7 +98,8 @@ def wait_for_backend(url):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", default=os.environ.get("DENSITY_API_URL", "http://localhost:8000"))
+    parser.add_argument("--url", default=os.environ.get("DENSITY_COLLECTOR_URL", "http://localhost:8001"),
+                        help="the collector (default http://localhost:8001)")
     parser.add_argument("--cameras", help="comma-separated camera ids (default: all in zones.json)")
     parser.add_argument("--hour", type=float, help="simulated hour of day to start at (default: now)")
     parser.add_argument("--speed", type=float, default=1, help="simulated seconds per real second")
@@ -106,8 +109,8 @@ def main():
 
     if wait_for_backend(args.url).get("database") == REAL_DB and not args.allow_real_db:
         raise SystemExit(
-            f"{args.url} is recording real history in backend/{REAL_DB}, so simulated counts would mix into it.\n"
-            "Start the backend with `npm run backend:sim` instead (it uses backend/sim.db),\n"
+            f"{args.url} is recording real history in the {REAL_DB} database, so simulated counts would mix into it.\n"
+            "Start the backend with `npm run backend:sim` instead (it uses the densityai_sim database),\n"
             "or pass --allow-real-db if you really mean it."
         )
 
@@ -144,9 +147,11 @@ def main():
             sample = {
                 "cameraId": cam.id, "ts": tick, "sentAt": time.time(), "occupancy": roi,
                 "entriesCum": cam.entries_cum, "exitsCum": cam.exits_cum, "fps": round(random.uniform(26, 30), 1),
+                "dwell": cam.dwell,
             }
             try:
                 post(args.url, token, sample)
+                cam.dwell = []
                 if not backend_up:
                     print("Backend is back.")
                 backend_up = True

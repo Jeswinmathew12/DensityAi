@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DensityAI occupancy pipeline for the Jetson (DeepStream 7.1, pyds 1.2.0).
 
-USB or Wi-Fi (RTSP) camera -> PeopleNet -> [tracker] -> nvdsanalytics (ROI count) -> probe -> backend.
+USB or Wi-Fi (RTSP) camera -> PeopleNet -> [tracker] -> nvdsanalytics (ROI count) -> probe -> collector.
 
     python3 jetson/occupancy_pipeline.py
     python3 jetson/occupancy_pipeline.py --uri rtsp://user:pass@192.168.1.50:554/stream1
@@ -32,7 +32,7 @@ from gi.repository import GLib, Gst  # noqa: E402
 
 import pyds  # noqa: E402
 
-from probe_client import ProbeClient  # noqa: E402
+from probe_client import DwellTracker, ProbeClient  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRACKER_DIR = "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app"
@@ -108,10 +108,46 @@ def on_bus_message(bus, message, loop):
     return True
 
 
-def make_analytics_probe(client, camera_id, last_frame):
-    """Builds the pad probe for the nvdsanalytics src pad. Stamps last_frame[0] on every buffer."""
+def tracked_ids_in_roi(frame_meta, obj_meta_type):
+    """Tracker ids of the people nvdsanalytics put inside ROI_NAME in this frame."""
+    ids = set()
+    l_obj = frame_meta.obj_meta_list
+    while l_obj is not None:
+        try:
+            obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
+        except StopIteration:
+            break
+        l_user = obj_meta.obj_user_meta_list
+        while l_user is not None:
+            try:
+                user_meta = pyds.NvDsUserMeta.cast(l_user.data)
+            except StopIteration:
+                break
+            if user_meta.base_meta.meta_type == obj_meta_type:
+                info = pyds.NvDsAnalyticsObjInfo.cast(user_meta.user_meta_data)
+                if ROI_NAME in info.roiStatus:
+                    ids.add(obj_meta.object_id)
+            try:
+                l_user = l_user.next
+            except StopIteration:
+                break
+        try:
+            l_obj = l_obj.next
+        except StopIteration:
+            break
+    return ids
+
+
+def make_analytics_probe(client, camera_id, last_frame, dwell_tracker=None):
+    """Builds the pad probe for the nvdsanalytics src pad. Stamps last_frame[0] on every buffer.
+
+    With a DwellTracker (only with --tracker, which gives people stable ids), it also measures
+    how long each person stays in the zone and sends those times with the counts.
+    """
     meta_type = pyds.nvds_get_user_meta_type("NVIDIA.DSANALYTICSFRAME.USER_META")
+    obj_meta_type = pyds.nvds_get_user_meta_type("NVIDIA.DSANALYTICSOBJ.USER_META")
     fps_counter = FpsCounter()
+    dwell_failed = []
 
     def probe(pad, info, _user_data):
         last_frame[0] = time.monotonic()
@@ -145,6 +181,14 @@ def make_analytics_probe(client, camera_id, last_frame):
                     l_user = l_user.next
                 except StopIteration:
                     break
+
+            if dwell_tracker is not None and not dwell_failed:
+                try:
+                    ids = tracked_ids_in_roi(frame_meta, obj_meta_type)
+                    client.add_dwell(camera_id, dwell_tracker.update(ids, time.time()))
+                except Exception as e:  # dwell is extra: never let it stop the counting
+                    dwell_failed.append(True)
+                    print(f"Dwell time turned off after an error: {e}", file=sys.stderr)
 
             refreshed = fps_counter.tick()
             # Throttles to 1 Hz and never blocks, so calling it every frame is fine.
@@ -346,7 +390,8 @@ def parse_args():
                    help="nvinfer config for PeopleNet")
     p.add_argument("--analytics-config", default=os.path.join(HERE, "config_nvdsanalytics.txt"),
                    help="nvdsanalytics config (ROI and line crossing)")
-    p.add_argument("--tracker", action="store_true", help="add nvtracker (needed for line crossing)")
+    p.add_argument("--tracker", action="store_true",
+                   help="add nvtracker (needed for line crossing and dwell time)")
     p.add_argument("--no-display", action="store_true", help="use fakesink instead of a window")
     p.add_argument("--preview-dir", help="keep the newest annotated frame in this directory for the "
                    "Admin page (use a RAM folder such as /dev/shm/densityai)")
@@ -360,7 +405,7 @@ def main():
         if not os.path.isfile(path):
             sys.exit(f"{label} file not found: {path}")
 
-    api_url = os.environ.get("DENSITY_API_URL", "http://localhost:8000")
+    api_url = os.environ.get("DENSITY_COLLECTOR_URL", "http://localhost:8001")
     client = ProbeClient(api_url, token=os.environ.get("INGEST_TOKEN"))
     print(f"Sending counts for {args.camera_id} to {api_url}")
     print(f"Camera: {redact(args.uri) if args.uri else args.device}")
@@ -376,7 +421,9 @@ def main():
 
     last_frame = [None]  # monotonic time of the newest frame; None until the first one
     analytics.get_static_pad("src").add_probe(
-        Gst.PadProbeType.BUFFER, make_analytics_probe(client, args.camera_id, last_frame), None)
+        Gst.PadProbeType.BUFFER,
+        make_analytics_probe(client, args.camera_id, last_frame, DwellTracker() if args.tracker else None),
+        None)
 
     loop = GLib.MainLoop()
     stalled = []

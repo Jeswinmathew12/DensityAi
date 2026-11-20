@@ -68,7 +68,7 @@ sudo date -s "YYYY-MM-DD HH:MM"
 
 **Success:** `date` shows the right time and `sudo apt update` runs without "not valid yet" errors.
 
-For laptop access to the Jetson, use a phone hotspot. Find the Jetson's address with `hostname -I`.
+For laptop access to the Jetson, see [Reaching the dashboard](#reaching-the-dashboard): on campus, eduroam works; on `ncsu-guest`, use the USB cable, a phone hotspot or Tailscale. Addresses change with the network, so nothing in this repo uses a fixed IP; find the current ones with `hostname -I`.
 
 ## Step 3: Power mode
 
@@ -212,20 +212,24 @@ numpy 2.x is not supported. If you see 2.x, run `pip3 install "numpy<2"`.
 ```bash
 sudo apt install -y python3.10-venv python3-pip
 git clone https://github.com/Jeswinmathew12/DensityAi.git && cd DensityAi
-git checkout dashboard
 python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
+npm run db:setup
 ```
 
-Without the `python3.10-venv` package, creating the venv fails.
+Without the `python3.10-venv` package, creating the venv fails. `npm run db:setup` installs PostgreSQL 14 from Ubuntu, starts it at boot, and creates a database role for your account, so nothing needs a password. Add `-- --timescale` to also install TimescaleDB (optional; it is tuned to use 1 GB so DeepStream keeps its memory).
 
-Run the backend:
+Check the database: `psql densityai -c 'select 1'` prints `1`.
+
+Run the collector and web service:
 
 ```bash
-backend/.venv/bin/uvicorn backend.app.main:create_app --factory --port 8000
+npm run backend
 ```
 
-Add `--host 0.0.0.0` only if another device needs to reach it. The pipeline on the Jetson posts to `localhost`, so the default is enough for that. If you set `INGEST_TOKEN` on the backend, set the same value for the pipeline.
+The collector (port 8001) receives the pipeline's counts and writes them to PostgreSQL. The web service (port 8000) reads them for the dashboard. If you set `INGEST_TOKEN` on the collector, set the same value for the pipeline.
+
+Optional, for the Store insights page: `npm run mock-store` writes six weeks of a sample store.
 
 Check it from a second terminal:
 
@@ -237,10 +241,10 @@ curl http://localhost:8000/api/health
 
 ## Step 9: Run the pipeline
 
-With the backend running, in another terminal and from the repo root:
+With the collector and web service running, in another terminal and from the repo root:
 
 ```bash
-export DENSITY_API_URL=http://localhost:8000     # the default
+export DENSITY_COLLECTOR_URL=http://localhost:8001   # the default
 export INGEST_TOKEN=...                          # only if the backend has one
 python3 jetson/occupancy_pipeline.py             # add --no-display over SSH
 ```
@@ -261,11 +265,15 @@ Ctrl+C stops the pipeline cleanly.
 
 ### On a laptop
 
+The simplest way needs nothing on the laptop: run `npm run serve` on the Jetson ([Step 11](#step-11-one-command-and-start-at-boot)) and open one of the addresses it prints.
+
+To run the dev server on the laptop instead (for frontend work):
+
 ```bash
-REACT_APP_API_URL=http://<jetson-ip>:8000 npm run start:live
+REACT_APP_API_URL=http://<jetson-address>:8000 npm run start:live
 ```
 
-This needs the backend started with `--host 0.0.0.0`, and a network where the laptop can reach the Jetson. Use a phone hotspot ([known issue 5](#5-ncsu-guest-network)). The backend only allows a dashboard served from `http://localhost:3000`, so run the dev server on the laptop as shown.
+This needs the backend started with `--host 0.0.0.0`, and a network where the laptop can reach the Jetson ([Reaching the dashboard](#reaching-the-dashboard)). The backend only allows a cross-origin dashboard served from `http://localhost:3000`, so run the dev server on the laptop as shown. Pass `REACT_APP_API_URL` on the command line like this, not in a `.env` file on the Jetson.
 
 ### On the Jetson
 
@@ -284,14 +292,7 @@ For development:
 npm run start:live
 ```
 
-For demo day, a static build uses less memory than the dev server:
-
-```bash
-REACT_APP_DATA_SOURCE=live npm run build
-python3 -m http.server 3000 --directory build
-```
-
-Open `http://localhost:3000` in a browser **on the Jetson**. The backend's CORS rules already allow `localhost:3000`. Opening the Jetson's dashboard from another device would need a different API URL baked into the build and a CORS change in the backend, which this runbook does not cover.
+For demo day, use `npm run serve` ([Step 11](#step-11-one-command-and-start-at-boot)). It builds the dashboard (a static build uses less memory than the dev server) and the backend serves it on port 8000, so it opens on the Jetson at `http://localhost:8000` and from any device that can reach the Jetson. The build has no backend address baked in: `npm run serve` ignores `REACT_APP_API_URL`, and the page talks to whatever address it was opened at, so it keeps working when the Jetson changes networks.
 
 **Success:** the dashboard shows Zone A with a live count that follows the camera.
 
@@ -299,7 +300,22 @@ Open `http://localhost:3000` in a browser **on the Jetson**. The backend's CORS 
 
 `npm run serve` runs the backend (port 8000, all devices) and the pipeline together, and restarts the pipeline when it stops. `sudo jetson/install-service.sh` makes that start at boot as the `densityai` systemd service. See "How to run on the Jetson" in the README for the details.
 
-**Success:** after a reboot, `journalctl -u densityai -f` shows `[start] Dashboard: http://...` and pipeline output, and the dashboard opens from a laptop on the same network.
+**Success:** after a reboot, `journalctl -u densityai -f` shows `[start] Dashboard is up` followed by its addresses and pipeline output, and the dashboard opens from a laptop at one of those addresses.
+
+### Reaching the dashboard
+
+Always `http://<address>:8000`, never https. Which address works depends on how the laptop or phone is connected:
+
+- **Same Wi-Fi (home, own router):** the Wi-Fi IP that `npm run serve` prints, or `http://<hostname>.local:8000` (mDNS; may not resolve on Windows or Android).
+- **Campus, eduroam:** works like home Wi-Fi when the Jetson and the viewer are both on eduroam (tested with a phone). Use the Wi-Fi IP `npm run serve` prints; it differs from your home IP.
+- **Campus, `ncsu-guest`:** may block device-to-device traffic ([known issue 5](#5-ncsu-guest-network)), so use eduroam or one of these:
+  - **USB cable:** connect the Jetson's USB-C port to the laptop. In USB device mode the Jetson is always at `http://192.168.55.1:8000`, and the laptop gets an address automatically.
+  - **Phone hotspot:** put the Jetson and the viewers on the hotspot, then use the IP printed for the Wi-Fi interface.
+  - **Tailscale:** works over any network. Once on the Jetson: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`; install Tailscale on each viewer and log in to the same account. `npm run serve` then prints the Tailscale name and IP.
+
+If SSH to the Jetson works but the page doesn't, forward the port: `ssh -L 8000:localhost:8000 <user>@<jetson-address>`, then open `http://localhost:8000` on the laptop.
+
+`npm run serve` prints the addresses at startup (with the service: `journalctl -u densityai | grep start`). If the Jetson changes networks while running, check `hostname -I` again; the dashboard doesn't need a rebuild.
 
 ## Step 12: Wi-Fi camera (Tapo C120)
 
@@ -386,7 +402,7 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! \
   - Laptop-to-Jetson traffic is likely blocked.
 - **Fix:**
   - Accept the terms page, and test with `curl -sI https://www.google.com | head -1`.
-  - Use a phone hotspot for laptop access.
+  - For laptop access, use eduroam, the USB cable, a phone hotspot or Tailscale ([Reaching the dashboard](#reaching-the-dashboard)).
   - Long term, register the Jetson's MAC address on the `ncsu` (Nomad) network. Get it with `cat /sys/class/net/wlP1p1s0/address`.
 
 ### 6. Do not upgrade Ubuntu
@@ -404,8 +420,14 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! \
 ### 8. Stale simulator data in the database
 
 - **Symptom:** history for Demo 2 includes fake rows.
-- **Cause:** `backend/density.db` holds simulator rows from testing.
-- **Fix:** stop the backend and delete `backend/density.db` before collecting real data. It is recreated on the next start.
+- **Cause:** the `densityai` database holds simulator rows from testing.
+- **Fix:** run `npm run backend:reset` before collecting real data. It moves the live site's events into a backup table. (The simulator normally goes to `densityai_sim` via `npm run backend:sim`.)
+
+### 9. Dashboard stuck on "Connecting to the backend at …"
+
+- **Symptom:** the dashboard opens but never shows counts, and the address in "Connecting to the backend at …" isn't the one in the browser's address bar (for example an old home IP, or `https://`). The browser console warns that the build was made with `REACT_APP_API_URL`.
+- **Cause:** a build with `REACT_APP_API_URL` baked in, usually from a `.env` file. It only works on the network it was built on.
+- **Fix:** `rm -rf build && npm run serve` (or `rm -rf build && sudo systemctl restart densityai`). `npm run serve` now always builds without `REACT_APP_API_URL` and warns if a `.env` file sets it; remove that line from `.env` to silence the warning.
 
 ## What is not in git
 
@@ -413,5 +435,5 @@ These exist only on the Jetson, and this runbook rebuilds them:
 
 - The PeopleNet model files and the TensorRT engine in `~/models/peoplenet` (Step 6)
 - The DeepStream install and `pyds` (Steps 4 and 7)
-- `backend/.venv` and `backend/density.db` (Step 8)
+- `backend/.venv`, PostgreSQL and its `densityai` database (Step 8)
 - The power mode and the clock fix (Steps 2 and 3)

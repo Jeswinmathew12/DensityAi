@@ -1,4 +1,4 @@
-"""Builds the dashboard's history (trends, traffic, stats, insights) from stored samples.
+"""Builds the dashboard's history (trends, traffic, stats, insights) from stored events.
 
 Returns the same shapes as the mock generators in src/utils/fakeDataGenerator.js. None means
 "no data": charts draw a gap and stats show a dash, so a camera that was off is never shown as
@@ -16,21 +16,23 @@ BUSIEST_INSIGHT_MIN = 60
 # A gap in a zone's data longer than this (minutes) becomes an "offline" insight.
 OFFLINE_INSIGHT_MIN = 5
 
-# One row per camera per minute: average count plus entries/exits in that minute, taken from
-# the cumulative counters. A counter that drops means the pipeline restarted and began again
-# from 0, so the new value is the count since the restart.
+# Average count per camera per minute, from the occupancy events.
 MINUTES_SQL = """
-WITH d AS (
-  SELECT camera_id, zone_id, ts, occupancy, entries_cum, exits_cum,
-         entries_cum - LAG(entries_cum) OVER w AS d_in,
-         exits_cum - LAG(exits_cum) OVER w AS d_out
-  FROM samples WHERE ts >= ? AND ts <= ?
-  WINDOW w AS (PARTITION BY camera_id ORDER BY ts)
-)
-SELECT camera_id, zone_id, CAST(ts / 60 AS INTEGER), AVG(occupancy),
-       SUM(CASE WHEN d_in IS NULL THEN 0 WHEN d_in >= 0 THEN d_in ELSE entries_cum END),
-       SUM(CASE WHEN d_out IS NULL THEN 0 WHEN d_out >= 0 THEN d_out ELSE exits_cum END)
-FROM d GROUP BY camera_id, zone_id, CAST(ts / 60 AS INTEGER)
+SELECT camera_id, zone_id, floor(extract(epoch FROM time) / 60)::bigint AS m, avg(value)
+FROM events
+WHERE site_id = %s AND kind = 'occupancy' AND camera_id IS NOT NULL
+  AND time >= to_timestamp(%s) AND time <= to_timestamp(%s)
+GROUP BY 1, 2, 3
+"""
+# People in and out per minute. The collector already turned the Jetson's cumulative
+# counters into per-moment entry/exit events.
+TRAFFIC_SQL = """
+SELECT floor(extract(epoch FROM time) / 60)::bigint AS m,
+       sum(value) FILTER (WHERE kind = 'entry'), sum(value) FILTER (WHERE kind = 'exit')
+FROM events
+WHERE site_id = %s AND kind IN ('entry', 'exit')
+  AND time >= to_timestamp(%s) AND time <= to_timestamp(%s)
+GROUP BY 1
 """
 
 
@@ -40,7 +42,7 @@ def clock(ts, tz):
     return f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}"
 
 
-def build(conn, config, now, tz):
+def build(conn, site_id, config, now, tz):
     """History for the 24 local hours ending with the current one, and stats for today."""
     now_local = datetime.fromtimestamp(now, tz)
     hour0 = now_local.replace(minute=0, second=0, microsecond=0).timestamp()
@@ -60,9 +62,15 @@ def build(conn, config, now, tz):
     cams_by_minute = defaultdict(dict)  # (zone_id, minute) -> {camera_id: avg count}
     entries, exits = [None] * HOURS, [None] * HOURS
     visitors_today = 0
-    for cam, zone_id, minute, occ, d_in, d_out in conn.execute(MINUTES_SQL, (start, now)):
+    for cam, zone_id, minute, occ in conn.execute(MINUTES_SQL, (site_id, start, now)):
         cams_by_minute[(zone_id, minute)][cam] = occ
+        # An hour with camera data but nobody crossing the line is 0, not "no data".
         i = bucket(minute)
+        entries[i] = entries[i] or 0
+        exits[i] = exits[i] or 0
+    for minute, d_in, d_out in conn.execute(TRAFFIC_SQL, (site_id, start, now)):
+        i = bucket(minute)
+        d_in, d_out = round(d_in or 0), round(d_out or 0)
         entries[i] = (entries[i] or 0) + d_in
         exits[i] = (exits[i] or 0) + d_out
         if minute * 60 >= midnight:

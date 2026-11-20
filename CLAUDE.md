@@ -15,7 +15,8 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 - React 18 (Create React App / `react-scripts` 5), plain JavaScript (no TypeScript)
 - Recharts for charts, lucide-react for icons
 - Plain CSS with CSS variables in `src/App.css` (no Tailwind, no CSS-in-JS)
-- Backend: Python 3.9+, FastAPI + uvicorn, SQLite via stdlib `sqlite3` (no ORM). Deps in `backend/requirements.txt`, installed into `backend/.venv`
+- Backend: Python 3.9+, FastAPI + uvicorn, PostgreSQL via `psycopg` 3 (plain SQL, no ORM; TimescaleDB optional). Deps in `backend/requirements.txt`, installed into `backend/.venv`
+- Architecture (mentor's ask for Demo 2): Jetson -> collector (`backend/app/collector.py`, :8001) -> PostgreSQL `events` table -> web service (`backend/app/main.py`, :8000, REST + `/ws/live`) -> dashboard. The collector and web service share only the database; the dashboard never talks to the Jetson or the collector
 
 ## Commands
 - `npm install`: install dependencies
@@ -23,38 +24,44 @@ Prioritize work that moves us toward these demos. Don't gold-plate features that
 - `npm run build`: production build (run this to check for errors before finishing a task)
 - `npm test`: run tests
 - `npm run backend:setup`: create `backend/.venv` and install Python deps (once)
-- `npm run backend`: FastAPI backend at http://localhost:8000 (auto-reloads)
+- `npm run db:setup`: install PostgreSQL and create your database role (once; `-- --timescale` adds TimescaleDB)
+- `npm run backend`: collector at :8001 + web service at http://localhost:8000 (auto-reload; API docs at /docs)
 - `npm run serve`: Jetson demo mode, one command (`jetson/start.sh`): rebuilds the live dashboard if needed, serves it plus the API on port 8000 for all devices, runs the pipeline and restarts it if it stops
-- `npm run backend:sim`: same backend, but history goes to `backend/sim.db` (use this with the simulator)
-- `npm run simulate`: fake Jetson that posts counts to the backend (`-- --help` for flags). Refuses to post into the real `backend/density.db`
-- `npm run backend:reset`: stop the backend first; moves `backend/density.db` to `backend/backups/` so history starts empty
+- `npm run backend:sim`: same, but using the `densityai_sim` database (use this with the simulator)
+- `npm run simulate`: fake Jetson that posts counts to the collector (`-- --help` for flags). Refuses to post into the real `densityai` database
+- `npm run mock-store`: writes six weeks of a fictional store ("sample-store" site) for the Store insights page
+- `npm run backend:reset`: moves the live site's events into a backup table so history starts empty
 - `npm run start:live`: dev server using the backend instead of mock data
-- `npm run backend:test`: backend tests (run these too before finishing backend work)
+- `npm run backend:test`: backend tests against PostgreSQL (`TEST_DATABASE_URL`, default `postgresql:///densityai_test`; skipped if unreachable). Run these too before finishing backend work
 
 ## Project structure
 ```
 public/index.html              HTML entry
 src/index.js                   React bootstrap
 src/App.jsx                    Layout + sidebar nav; picks the page from the URL hash
-src/pages/                     Dashboard, Zones, Trends, Settings, Admin pages
+src/pages/                     Dashboard, Zones, Trends, Store insights, System, Settings, Admin pages
 src/App.css                    All styles + CSS variables
 src/hooks/useOccupancyData.js  Data-access layer: mock generators or live backend (REACT_APP_DATA_SOURCE)
 src/hooks/useHashRoute.js      Tiny hash router (no react-router dependency)
 src/hooks/useAdmin.js          Admin login + live camera preview polling
+src/hooks/useStoreAnalytics.js Sites, store analytics and system status (mock or web service)
 src/services/api.js            Backend URL + WebSocket client (only used by hooks in src/hooks/)
 src/utils/fakeDataGenerator.js Mock data for all dashboard sections
 src/utils/status.js            Shared status helper (thresholds live here only)
-src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights
-backend/app/main.py            FastAPI app: /api/ingest, /api/zones, /api/health, /api/admin/*, /ws/live
+src/components/                KpiCards, SeatStrip, StatRow, OccupancyTrend, ZoneTable, TrafficChart, Insights, plus Store insights (StoreKpis, Recommendations, BusyHeatmap, VisitorCharts, ZoneCharts, AlertsList) and SystemFlow
+backend/app/collector.py       Collector: /api/ingest, /api/events -> events table (counts, entries/exits, dwell, alerts)
+backend/app/main.py            Web service: /api/zones, /api/history, /api/sites/*, /api/system, /api/admin/*, /ws/live
+backend/app/analytics.py       Store insights from events (heatmap, weekday/hour, zones, dwell, recommendations)
 backend/app/processing.py      Pure logic: smoothing, multi-camera fusion, staleness, clock correction
-backend/app/db.py              SQLite schema + writes
+backend/app/db.py              PostgreSQL schema (sites, zones, cameras, events) + queries
+backend/mock_store.py          Sample retail store generator (writes real events)
 backend/zones.json             Zones (capacity, fusion) and which camera belongs to which zone
 backend/simulator.py           Fake Jetson for development
 jetson/occupancy_pipeline.py   DeepStream 7.1 app: USB or RTSP (--uri) camera -> PeopleNet -> nvdsanalytics ROI count -> probe_client
 jetson/config_nvdsanalytics.txt ROI + line-crossing config (line crossing off for Demo 1)
 jetson/setup_peoplenet.sh      Downloads PeopleNet and writes config_infer_peoplenet.txt (idempotent)
-jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson
-jetson/start.sh                `npm run serve`: backend + pipeline in one command, pipeline auto-restarts
+jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson, plus DwellTracker (--tracker)
+jetson/start.sh                `npm run serve`: collector + web service + pipeline in one command, pipeline auto-restarts
 jetson/install-service.sh      Installs/removes the `densityai` systemd service that runs start.sh at boot
 docs/jetson-setup.md           From-scratch Jetson runbook + known issues (source of truth for the Jetson)
 ```
@@ -62,7 +69,7 @@ docs/jetson-setup.md           From-scratch Jetson runbook + known issues (sourc
 ## Data
 - `npm start` uses mock data from `src/utils/fakeDataGenerator.js`. `npm run start:live` takes live zone counts from the backend over `/ws/live` and trends, traffic, stats and insights from `/api/history` (refreshed every minute). Live mode never shows mock data: `null` in the history means no data and is shown as a gap or a dash.
 - Treat the shapes returned by the generator functions as the **data contract**. The backend must return the same shapes (tests in `backend/tests/test_api.py` check the zone keys). When adding a feature, extend the generator and the backend together rather than hardcoding data in components.
-- Keep data fetching isolated from rendering: only hooks in `src/hooks/` (`useOccupancyData`, `useAdmin`) talk to `src/services/api.js`; components just receive props or call those hooks.
+- Keep data fetching isolated from rendering: only hooks in `src/hooks/` (`useOccupancyData`, `useAdmin`, `useStoreAnalytics`) talk to `src/services/api.js`; components just receive props or call those hooks.
 - The backend sends counts and capacity, never a status. Busy/Available logic stays in `src/utils/status.js`.
 - The Jetson sends aggregated counts only (never frames). One exception: the password-protected Admin page's live camera view. The pipeline keeps only its newest small annotated frame in RAM (`/dev/shm`), the backend serves it only with `ADMIN_PASSWORD`, and it is off when that is unset. Never store frames on disk or send them anywhere else. The ingest payload and API are documented in the README's "Backend" section; the Jetson setup runbook is `docs/jetson-setup.md` (`occupancy-tracker-plan.md` has the background).
 
@@ -70,7 +77,7 @@ docs/jetson-setup.md           From-scratch Jetson runbook + known issues (sourc
 - Light theme, left sidebar nav, card-based layout. Visual references: "Occupancy Insight" style dashboards (KPI cards on top, trend chart + zone table, bidirectional in/out traffic chart, insights panel).
 - Occupancy status colors: green = Available, blue = Moderate, red = Busy.
 - Status thresholds (adjust as team decides): under 50% Available, 50–75% Moderate, over 75% Busy. Keep this logic in ONE shared helper, not duplicated per component.
-- Use existing CSS variables in `App.css` for colors instead of new hardcoded hex values.
+- Use existing CSS variables in `App.css` for colors instead of new hardcoded hex values. Charts use `--c1`..`--c8` (categorical, fixed order, color follows the entity) and `--seq-*` (one blue ramp for magnitude).
 
 ## Conventions
 - Functional components and hooks only.

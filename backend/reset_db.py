@@ -1,55 +1,45 @@
-"""Starts history over: moves the backend's database into a backups/ folder next to it
-(backend/backups/ by default), so the next backend start begins empty. Nothing is deleted;
-remove old backups by hand.
+"""Starts the live camera's history over: copies its events into a backup table
+(events_backup_<date>) and then removes them from `events`, so the dashboard begins empty.
+Nothing is lost; drop old backup tables by hand. Sample-store data is left alone.
 
-    npm run backend:reset                     # backend/density.db (or $DENSITY_DB)
-    npm run backend:reset -- backend/sim.db   # a different database
-
-Stop the backend that uses the database first.
+    npm run backend:reset                    # the live site in $DATABASE_URL (default densityai)
+    npm run backend:reset -- --site sample-store
 """
 import argparse
-import json
-import os
-import urllib.request
+import sys
 from datetime import datetime
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent
+from psycopg import sql
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from backend.app import db  # noqa: E402
 
 
-def backend_database(url):
-    """Name of the database the backend at `url` is using, or None if nothing answers."""
-    try:
-        with urllib.request.urlopen(f"{url}/api/health", timeout=2) as r:
-            return json.load(r).get("database")
-    except OSError:
-        return None
-
-
-def reset(db, backups, stamp):
-    """Move `db` into `backups`. Returns the new path, or None if there was nothing to move."""
-    if not db.exists():
-        return None
-    backups.mkdir(exist_ok=True)
-    dest = backups / f"{db.stem}-{stamp}{db.suffix}"
-    db.rename(dest)
-    return dest
+def reset(conn, site_id, stamp):
+    """Move the site's events into a backup table. Returns (table name, rows moved)."""
+    table = f"events_backup_{stamp}"
+    with conn.transaction():
+        conn.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} (LIKE events)").format(sql.Identifier(table)))
+        moved = conn.execute(
+            sql.SQL("INSERT INTO {} SELECT * FROM events WHERE site_id = %s").format(sql.Identifier(table)),
+            (site_id,),
+        ).rowcount
+        conn.execute("DELETE FROM events WHERE site_id = %s", (site_id,))
+    return table, moved
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("db", nargs="?", type=Path,
-                        default=Path(os.environ.get("DENSITY_DB") or BACKEND_DIR / "density.db"))
-    parser.add_argument("--url", default="http://localhost:8000", help="backend to check is stopped")
+    parser.add_argument("--site", help="site id (default: the live camera site)")
+    parser.add_argument("--database-url", help="default: $DATABASE_URL or " + db.DEFAULT_URL)
     args = parser.parse_args()
-
-    if backend_database(args.url) == args.db.name:
-        raise SystemExit(f"The backend at {args.url} is using {args.db.name}. Stop it first, then run this again.")
-    dest = reset(args.db, args.db.parent / "backups", datetime.now().strftime("%Y%m%d-%H%M%S"))
-    if dest:
-        print(f"Moved {args.db} to {dest}. The next backend start begins with empty history.")
-    else:
-        print(f"{args.db} doesn't exist, so history is already empty.")
+    conn = db.connect(args.database_url)
+    site_id = args.site or db.live_site_id(conn)
+    if not site_id:
+        raise SystemExit("No live site in the database yet, so there is nothing to reset.")
+    table, moved = reset(conn, site_id, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    print(f"Moved {moved:,} events of site {site_id!r} into table {table}. History starts empty now.")
 
 
 if __name__ == "__main__":
