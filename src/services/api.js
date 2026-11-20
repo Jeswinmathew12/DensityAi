@@ -1,5 +1,6 @@
-// Talks to the FastAPI backend in backend/. Components never import this directly;
-// useOccupancyData is the only consumer.
+// Talks to the DensityAI web service (backend/app/main.py), which reads the PostgreSQL database
+// the collector fills. The dashboard never talks to the Jetson directly. Components never import
+// this; only hooks in src/hooks/ do.
 
 // REACT_APP_API_URL wins if set (meant for the dev server). A production build (served by the
 // backend itself) talks to whatever address it was loaded from, so it works from any device and
@@ -86,3 +87,20 @@ export async function fetchAdminCameras(password) {
 export async function fetchPreviewFrame(cameraId, password) {
   return (await adminFetch(`/api/admin/preview/${encodeURIComponent(cameraId)}`, password)).blob();
 }
+
+async function getJson(path) {
+  const res = await fetch(`${API_URL}${path}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return res.json();
+}
+
+// [{ id, name, kind: 'live' | 'sample', tz, live, zones, cameras }] for every site in the database.
+export const fetchSites = () => getJson('/api/sites');
+
+// Busiest hours and days, zone reach, dwell, alerts and recommendations for one site.
+// Same shape as generateStoreAnalytics().
+export const fetchAnalytics = (siteId, days) =>
+  getJson(`/api/sites/${encodeURIComponent(siteId)}/analytics?days=${days}`);
+
+// Health of each hop from camera to dashboard. Same shape as generateSystemStatus().
+export const fetchSystem = () => getJson('/api/system');
