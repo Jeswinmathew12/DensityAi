@@ -24,9 +24,9 @@ fi
 
 cat > "$UNIT" <<EOF
 [Unit]
-Description=DensityAI backend and camera pipeline
-After=network-online.target
-Wants=network-online.target
+Description=DensityAI camera pipeline, collector and web service
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
 
 [Service]
 User=$RUN_AS

@@ -1,6 +1,7 @@
 {
+  "site": { "id": "live", "name": "Live camera (demo table)" },
   "zones": [
-    { "id": "zone-a", "name": "Zone A - Main Room", "capacity": 40, "fusion": "sum" }
+    { "id": "zone-a", "name": "Zone A - Main Room", "capacity": 40, "fusion": "sum", "alertAt": 30 }
   ],
   "cameras": [
     { "id": "cam-1", "zoneId": "zone-a" }
