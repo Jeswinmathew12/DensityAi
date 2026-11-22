@@ -1,0 +1,17 @@
+/* Fonts are bundled with the dashboard so it looks right with no internet, e.g. on the
+   Jetson's own DensityAI Wi-Fi. Both are SIL Open Font License, latin subset from Google Fonts. */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('./bricolage-grotesque-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('./instrument-sans-latin.woff2') format('woff2');
+}
