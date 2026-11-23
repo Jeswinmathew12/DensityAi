@@ -56,6 +56,7 @@ jetson/setup_peoplenet.sh      Downloads PeopleNet and writes config_infer_peopl
 jetson/probe_client.py         Non-blocking sender the DeepStream probe calls on the Jetson
 jetson/start.sh                `npm run serve`: backend + pipeline in one command, pipeline auto-restarts
 jetson/install-service.sh      Installs/removes the `densityai` systemd service that runs start.sh at boot
+jetson/network/                DensityAI Wi-Fi (Jetson as access point, 10.42.0.1), set-camera.sh (CAMERA_URI), fix-uplink.sh (Mac Internet Sharing over USB-C)
 docs/jetson-setup.md           From-scratch Jetson runbook + known issues (source of truth for the Jetson)
 ```
 
