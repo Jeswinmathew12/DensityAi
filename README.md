@@ -96,7 +96,7 @@ Jetson probe / simulator --POST /api/ingest (1 Hz per camera)--> FastAPI + SQLit
   - A zone is marked `stale` (shown as "Offline") when its cameras stop reporting for 10 seconds.
 - **Endpoints:**
   - `GET /api/zones`: live zones, same shape as `generateZones()`
-  - `GET /api/history`: last 24 local hours (trends, traffic) and today's stats and insights, built from stored samples. Same shapes as the mock generators, with `null` where there is no data, so a camera that was off shows as a gap, not 0.
+  - `GET /api/history`: last 24 local hours of occupancy trends and aggregate/per-zone entry and exit counts, plus today's stats and structured demand/data insights. Insights use `{id, category, title, detail}`; the dashboard adds current capacity watches from live zone counts. Same shapes as the mock generators, with `null` where there is no data, so a camera that was off shows as a gap, not 0.
   - `GET /api/health`: per-camera last-seen time and FPS
   - `GET /api/admin/cameras`, `GET /api/admin/preview/{cameraId}`: the Admin page's camera list and newest annotated JPEG frame. Need `X-Admin-Password`; return 404 when `ADMIN_PASSWORD` is unset (admin off) or there's no frame from the last 5 s
   - `WS /ws/live`: pushes `{ "type": "zones", "zones": [...] }` on connect and whenever counts change
@@ -124,7 +124,7 @@ npm install
 npm start
 ```
 
-Open http://localhost:3000. Live counts drift with new mock data every 3 seconds.
+Open http://localhost:3000. Live counts drift with new mock data every 3 seconds. The default mock scenario is one Student Union with food-court seating and three restaurant queues, plus bookstore, card services, lounge, and entrance zones. It does not change the live camera configuration in `backend/zones.json`.
 
 ### With the backend (live data)
 

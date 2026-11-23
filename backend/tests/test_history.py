@@ -38,9 +38,11 @@ def test_empty_database_has_no_data_rather_than_zeros(conn):
     h = history.build(conn, CONFIG, NOW, NY)
     trend = h["trends"]["zone-a"]
     assert len(trend) == 24 and len(h["traffic"]) == 24
+    assert len(h["trafficByZone"]["zone-a"]) == 24
     assert [p["hour"] for p in trend[-3:]] == [13, 14, 15]
     assert all(p["occupancy"] is None for p in trend)
     assert all(t["entries"] is None and t["exits"] is None for t in h["traffic"])
+    assert all(t["entries"] is None and t["exits"] is None for t in h["trafficByZone"]["zone-a"])
     assert h["stats"] == {"peakHour": None, "avgOccupancy": None, "totalVisitors": None}
     assert h["insights"] == []
 
@@ -59,6 +61,32 @@ def test_counter_reset_is_not_negative_traffic(conn):
         add(conn, at(14, minute), 5, ins=cum, outs=cum)
     t = history.build(conn, CONFIG, NOW, NY)["traffic"][-2]
     assert (t["hour"], t["entries"], t["exits"]) == (14, 5, 5)
+
+
+def test_traffic_is_separated_by_zone_and_still_aggregated(conn):
+    config = {
+        "zones": [
+            {"id": "zone-a", "name": "Zone A", "capacity": 40, "fusion": "sum"},
+            {"id": "zone-b", "name": "Zone B", "capacity": 30, "fusion": "sum"},
+        ],
+        "cameras": [
+            {"id": "cam-1", "zoneId": "zone-a"},
+            {"id": "cam-2", "zoneId": "zone-b"},
+        ],
+    }
+    add(conn, at(12, 0), 5, cam="cam-1", zone="zone-a", ins=2, outs=1)
+    add(conn, at(12, 30), 8, cam="cam-1", zone="zone-a", ins=6, outs=3)
+    add(conn, at(12, 0), 4, cam="cam-2", zone="zone-b", ins=1, outs=2)
+    add(conn, at(12, 30), 7, cam="cam-2", zone="zone-b", ins=4, outs=5)
+
+    h = history.build(conn, config, NOW, NY)
+    a = next(point for point in h["trafficByZone"]["zone-a"] if point["hour"] == 12)
+    b = next(point for point in h["trafficByZone"]["zone-b"] if point["hour"] == 12)
+    total = next(point for point in h["traffic"] if point["hour"] == 12)
+
+    assert (a["entries"], a["exits"]) == (4, 2)
+    assert (b["entries"], b["exits"]) == (3, 3)
+    assert (total["entries"], total["exits"]) == (7, 5)
 
 
 def test_sum_zone_needs_every_camera(conn):
@@ -93,17 +121,32 @@ def test_insights_for_busiest_hour_and_offline_gap(conn):
         add(conn, at(13, minute), 5)
     for minute in range(20, 30):
         add(conn, at(15, minute), 12)
-    texts = [i["text"] for i in history.build(conn, CONFIG, NOW, NY)["insights"]]
-    assert texts == [
-        "Zone A has been busiest at 3:00 PM today (avg 12 people).",
-        "Zone A was offline 2:00 PM to 3:20 PM.",
+    assert history.build(conn, CONFIG, NOW, NY)["insights"] == [
+        {
+            "id": "data-zone-a",
+            "category": "data",
+            "title": "Camera data gap in Zone A",
+            "detail": "Camera data paused from 2:00 PM to 3:20 PM.",
+        },
+        {
+            "id": "demand-zone-a",
+            "category": "demand",
+            "title": "Zone A peak demand",
+            "detail": "12 people at 3:00 PM today; 30% of capacity.",
+        },
     ]
 
 
 def test_insight_for_camera_that_is_still_offline(conn):
     add(conn, at(15, 0), 5)
-    texts = [i["text"] for i in history.build(conn, CONFIG, NOW, NY)["insights"]]
-    assert texts == ["Zone A has had no camera data since 3:01 PM."]
+    assert history.build(conn, CONFIG, NOW, NY)["insights"] == [
+        {
+            "id": "data-zone-a",
+            "category": "data",
+            "title": "Camera data gap in Zone A",
+            "detail": "No camera data since 3:01 PM.",
+        }
+    ]
 
 
 def test_history_survives_backend_restart(tmp_path):
@@ -119,6 +162,6 @@ def test_history_survives_backend_restart(tmp_path):
         [zone] = c.get("/api/zones").json()
     # The live view waits for the camera to post again instead of showing an old count.
     assert zone["stale"] is True and zone["lastUpdated"] is None
-    assert set(h) == {"trends", "traffic", "stats", "insights"}
+    assert set(h) == {"trends", "traffic", "trafficByZone", "stats", "insights"}
     assert h["trends"]["zone-a"][-1]["occupancy"] == 12
     assert h["stats"]["avgOccupancy"] == 12

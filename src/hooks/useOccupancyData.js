@@ -3,6 +3,7 @@ import {
   generateZones,
   stepZones,
   generateOccupancyTrend,
+  generateTrafficByZone,
   generateTraffic,
   generateDailyStats,
   generateInsights,
@@ -12,18 +13,25 @@ import { fetchHistory, openLiveSocket } from '../services/api';
 // Set REACT_APP_DATA_SOURCE=live (e.g. `npm run start:live`) to use the backend.
 export const DATA_SOURCE = process.env.REACT_APP_DATA_SOURCE === 'live' ? 'live' : 'mock';
 
-const mockHistory = (zoneIds) => ({
-  trends: Object.fromEntries(zoneIds.map((id) => [id, generateOccupancyTrend(id)])),
-  traffic: generateTraffic(),
-  stats: generateDailyStats(),
-  insights: generateInsights(),
-});
+const mockHistory = (zones) => {
+  const zoneIds = zones.map((zone) => zone.id);
+  const trends = Object.fromEntries(zoneIds.map((id) => [id, generateOccupancyTrend(id)]));
+  const trafficByZone = generateTrafficByZone(zoneIds);
+  const traffic = generateTraffic(trafficByZone);
+  return {
+    trends,
+    traffic,
+    trafficByZone,
+    stats: generateDailyStats(trends, traffic),
+    insights: generateInsights(zones, trends),
+  };
+};
 
 // Mock: fake generators; only the live zone counts update on each tick.
 function useMockData(intervalMs = 3000) {
   const [data, setData] = useState(() => {
     const zones = generateZones();
-    return { zones, ...mockHistory(zones.map((z) => z.id)) };
+    return { zones, ...mockHistory(zones) };
   });
 
   useEffect(() => {
@@ -41,6 +49,7 @@ function useMockData(intervalMs = 3000) {
 const EMPTY_HISTORY = {
   trends: {},
   traffic: [],
+  trafficByZone: {},
   stats: { peakHour: null, avgOccupancy: null, totalVisitors: null },
   insights: [],
 };
@@ -83,6 +92,6 @@ function useLiveData() {
 }
 
 // Data-access layer: the only place that knows where data comes from. Pages get
-// { zones, trends, traffic, stats, insights, source, connection }.
+// { zones, trends, traffic, trafficByZone, stats, insights, source, connection }.
 const useOccupancyData = DATA_SOURCE === 'live' ? useLiveData : useMockData;
 export default useOccupancyData;

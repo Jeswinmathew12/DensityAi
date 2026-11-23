@@ -5,7 +5,7 @@ export default function StatRow({ stats }) {
   const items = [
     ['Peak hour', stats.peakHour],
     ['Average occupancy', stats.avgOccupancy],
-    ['Visitors today', stats.totalVisitors],
+    ['Entries today', stats.totalVisitors],
   ];
   return (
     <dl className="stat-row">

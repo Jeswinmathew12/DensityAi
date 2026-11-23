@@ -59,12 +59,17 @@ def build(conn, config, now, tz):
 
     cams_by_minute = defaultdict(dict)  # (zone_id, minute) -> {camera_id: avg count}
     entries, exits = [None] * HOURS, [None] * HOURS
+    zone_entries = {z["id"]: [None] * HOURS for z in zones}
+    zone_exits = {z["id"]: [None] * HOURS for z in zones}
     visitors_today = 0
     for cam, zone_id, minute, occ, d_in, d_out in conn.execute(MINUTES_SQL, (start, now)):
         cams_by_minute[(zone_id, minute)][cam] = occ
         i = bucket(minute)
         entries[i] = (entries[i] or 0) + d_in
         exits[i] = (exits[i] or 0) + d_out
+        if zone_id in zone_entries:
+            zone_entries[zone_id][i] = (zone_entries[zone_id][i] or 0) + d_in
+            zone_exits[zone_id][i] = (zone_exits[zone_id][i] or 0) + d_out
         if minute * 60 >= midnight:
             visitors_today += d_in
 
@@ -98,6 +103,13 @@ def build(conn, config, now, tz):
         {"hour": h, "label": f"{h}:00", "entries": e, "exits": x}
         for h, e, x in zip(labels, entries, exits)
     ]
+    traffic_by_zone = {
+        zone_id: [
+            {"hour": h, "label": f"{h}:00", "entries": e, "exits": x}
+            for h, e, x in zip(labels, zone_entries[zone_id], zone_exits[zone_id])
+        ]
+        for zone_id in zone_entries
+    }
 
     # Building-wide total for minutes where every zone has data.
     shared = set.intersection(*(set(m) for m in zone_minutes.values())) if zones else set()
@@ -118,13 +130,15 @@ def build(conn, config, now, tz):
     return {
         "trends": trends,
         "traffic": traffic,
+        "trafficByZone": traffic_by_zone,
         "stats": stats,
         "insights": insights(zones, zone_minutes, now, midnight, hour_starts, hourly, tz),
     }
 
 
 def insights(zones, zone_minutes, now, midnight, hour_starts, hourly, tz):
-    out = []
+    demand = []
+    data = []
     now_minute = int(now // 60)
     for z in zones:
         today = sorted(m for m in zone_minutes[z["id"]] if m * 60 >= midnight)
@@ -134,14 +148,46 @@ def insights(zones, zone_minutes, now, midnight, hour_starts, hourly, tz):
 
         if len(today) >= BUSIEST_INSIGHT_MIN:
             avg, i = max((v, i) for i, v in enumerate(hourly(values)) if v is not None)
-            out.append(f"{z['name']} has been busiest at {clock(hour_starts[i], tz)} today (avg {avg} people).")
+            if avg > 0:
+                capacity = z.get("capacity", 0)
+                percent = round(avg * 100 / capacity) if capacity > 0 else None
+                detail = f"{avg} {'person' if avg == 1 else 'people'} at {clock(hour_starts[i], tz)} today"
+                if percent is not None:
+                    detail += f"; {percent}% of capacity"
+                demand.append((
+                    percent if percent is not None else avg,
+                    {
+                        "id": f"demand-{z['id']}",
+                        "category": "demand",
+                        "title": f"{z['name']} peak demand",
+                        "detail": f"{detail}.",
+                    },
+                ))
 
         # Most recent gap today, including one that is still going on.
         if now_minute - today[-1] > OFFLINE_INSIGHT_MIN:
-            out.append(f"{z['name']} has had no camera data since {clock((today[-1] + 1) * 60, tz)}.")
+            data.append((
+                now_minute - today[-1],
+                {
+                    "id": f"data-{z['id']}",
+                    "category": "data",
+                    "title": f"Camera data gap in {z['name']}",
+                    "detail": f"No camera data since {clock((today[-1] + 1) * 60, tz)}.",
+                },
+            ))
         else:
             gaps = [(a, b) for a, b in zip(today, today[1:]) if b - a > OFFLINE_INSIGHT_MIN]
             if gaps:
                 a, b = gaps[-1]
-                out.append(f"{z['name']} was offline {clock((a + 1) * 60, tz)} to {clock(b * 60, tz)}.")
-    return [{"id": i + 1, "text": text} for i, text in enumerate(out)]
+                data.append((
+                    b - a,
+                    {
+                        "id": f"data-{z['id']}",
+                        "category": "data",
+                        "title": f"Camera data gap in {z['name']}",
+                        "detail": f"Camera data paused from {clock((a + 1) * 60, tz)} to {clock(b * 60, tz)}.",
+                    },
+                ))
+    data.sort(key=lambda entry: entry[0], reverse=True)
+    demand.sort(key=lambda entry: entry[0], reverse=True)
+    return [item for _, item in data] + [item for _, item in demand]
