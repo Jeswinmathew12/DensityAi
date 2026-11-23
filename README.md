@@ -11,7 +11,7 @@ The main goal of the UI is to answer **"how busy is it right now?"** at a glance
 ### System overview
 
 ```
-USB camera -> Jetson Orin Nano, JetPack 6.2.1 + DeepStream 7.1 (PeopleNet + tracker + line-crossing analytics)
+USB or Wi-Fi (RTSP) camera -> Jetson Orin Nano, JetPack 6.2.1 + DeepStream 7.1 (PeopleNet + tracker + line-crossing analytics)
            -> SQLite -> FastAPI REST/WebSocket -> React dashboard (this repo)
 ```
 
@@ -72,6 +72,8 @@ jetson/setup_peoplenet.sh      Downloads PeopleNet and writes its nvinfer config
 jetson/occupancy_pipeline.py   DeepStream pipeline: camera -> PeopleNet -> ROI count -> backend
 jetson/config_nvdsanalytics.txt ROI and line-crossing config for the pipeline
 jetson/probe_client.py         Sender the DeepStream probe calls on the Jetson
+jetson/start.sh                `npm run serve` and the boot service: backend + pipeline, auto-restart
+jetson/network/                DensityAI Wi-Fi scripts: jetson-wifi.sh, set-camera.sh, fix-uplink.sh
 ```
 
 ### Data
@@ -119,7 +121,7 @@ In live mode the dashboard loads `/api/history` on connect and every minute, so 
 ```bash
 git clone https://github.com/Jeswinmathew12/DensityAi.git
 cd DensityAi
-git checkout dashboard      # dashboard code lives on this branch
+git checkout demo-day       # what the Jetson runs for Design Day, until it's merged into master
 npm install
 npm start
 ```
@@ -157,7 +159,7 @@ Then on a phone or laptop, open `http://<one-of-those-ips>:8000` (http, not http
 
 - `--host 0.0.0.0` is required. `npm run backend` only accepts connections from the same machine.
 - Leave `REACT_APP_API_URL` empty for this build. If it's set (for example in `.env`), that address is baked into the build and the dashboard breaks on any other network.
-- Viewers must be on the same network. On campus, eduroam works; `ncsu-guest` may block device-to-device traffic. See [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
+- Viewers must be on the same network. On campus, `ncsu` and `ncsu-guest` block device-to-device traffic, so use the Jetson's own [DensityAI Wi-Fi](#demo-setup-the-densityai-wi-fi). See [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
 - If the machine has a firewall, open port 8000 (for example `sudo ufw allow 8000`).
 
 ### Other commands
@@ -180,14 +182,48 @@ Then on a phone or laptop, open `http://<one-of-those-ips>:8000` (http, not http
 
 The Jetson already has everything installed. To rebuild one from scratch, follow [docs/jetson-setup.md](docs/jetson-setup.md).
 
+### Demo setup: the DensityAI Wi-Fi
+
+This is how we run it on campus and on demo day. The Jetson broadcasts its own Wi-Fi network called **DensityAI**. The Tapo camera, and anyone who wants to watch, join it. We do it this way because NC State Wi-Fi (`ncsu`, `ncsu-guest`, eduroam) blocks devices from talking to each other: the camera on campus Wi-Fi is invisible to the Jetson.
+
+```
+Tapo C120 camera --Wi-Fi--> DensityAI (the Jetson, 10.42.0.1) <--Wi-Fi-- phones and laptops
+                                      |
+                                   USB-C cable (optional) --> Mac on ncsu, with Internet Sharing
+```
+
+**Every time (nothing to type):**
+
+1. Power on the Jetson and the camera. Wait about 2 minutes. The DensityAI Wi-Fi, the camera connection and the dashboard all start by themselves.
+2. Open the dashboard. **Nothing opens by itself**; type the address:
+   - **Any phone or laptop:** join the **DensityAI** Wi-Fi (ask the team for the password), then open **http://10.42.0.1:8000**. This works with no internet at all. That device has no internet while it's on DensityAI, unless a Mac is sharing it (next point).
+   - **A Mac on the USB-C cable:** keep the Mac on `ncsu` (or home Wi-Fi), plug the Jetson's USB-C port into the Mac, and open **http://192.168.2.200:8000**. The Mac keeps its own internet. This needs Internet Sharing on, once: System Settings > General > Sharing > the (i) next to **Internet Sharing** > share your connection from **Wi-Fi** to **Linux for Tegra** > turn Internet Sharing on. macOS can't share eduroam, so the Mac must be on `ncsu` or home Wi-Fi. Without Internet Sharing, the cable address is http://192.168.55.1:8000 instead.
+   - **On the Jetson itself:** http://localhost:8000.
+3. Check the **Admin** page (if `ADMIN_PASSWORD` is set) to see what the camera sees.
+
+The camera has a reserved address on DensityAI (ours is `10.42.0.108`), so nothing changes after a restart. The camera and counting don't need the Mac or any internet. The internet through the Mac is only for the Tapo app, which needs it to add or change the camera, and to give phones on DensityAI internet. Keep the camera within about 10 to 15 m of the Jetson, ideally in sight of it.
+
+**If something's wrong:**
+
+| Problem | Fix |
+|---|---|
+| Page won't load on DensityAI | Use `http://10.42.0.1:8000` exactly (http, not https). A tab opened on another network has the old address. |
+| Page won't load on the Mac | Cable in? Internet Sharing on, with the Mac on `ncsu` (not eduroam)? Then `http://192.168.2.200:8000`. |
+| Everything on DensityAI lost internet after the cable wiggled | From the Mac: `ssh -t <user>@192.168.2.200 "sudo ~/DensityAi/jetson/network/fix-uplink.sh"`. It runs every 10 s by itself too. |
+| Zone says Offline | The camera is off, out of range, or on another network. In the Tapo app, check it's on DensityAI. Then `sudo jetson/network/set-camera.sh --find` on the Jetson shows its address. |
+| Counts look doubled up close | Normal when someone fills the frame. Mount the camera high and a few meters back. |
+
+**Setting it up on a new Jetson or camera:** follow [Step 13 of the runbook](docs/jetson-setup.md#step-13-densityai-wi-fi-for-campus-and-demo-day). The scripts are in `jetson/network/`: `jetson-wifi.sh` (creates the DensityAI Wi-Fi), `set-camera.sh` (points DensityAI at the camera) and `fix-uplink.sh` (internet through the Mac).
+
 ### Normal use: the boot service
 
 The Jetson runs DensityAI as a background service called `densityai`. It starts by itself whenever the Jetson powers on, so on demo day you only need to:
 
-1. Power on the Jetson and wait about a minute.
+1. Power on the Jetson and wait about 2 minutes.
 2. Open the dashboard in a browser. **Nothing opens by itself**; type the address:
    - on the Jetson: `http://localhost:8000`
-   - on a laptop or phone: one of the addresses the service prints at startup (`journalctl -u densityai | grep start`), or `http://<ip>:8000` with an IP from `hostname -I`. Which one works depends on the network; see [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
+   - on the DensityAI Wi-Fi: `http://10.42.0.1:8000` ([Demo setup](#demo-setup-the-densityai-wi-fi))
+   - on a laptop or phone on another network: one of the addresses the service prints at startup (`journalctl -u densityai | grep start`), or `http://<ip>:8000` with an IP from `hostname -I`. Which one works depends on the network; see [Reaching the Jetson on any network](#reaching-the-jetson-on-any-network).
 
 The service runs the backend and the camera pipeline together, restarts the pipeline if the camera is unplugged or it crashes, and waits for the clock to sync after a power loss so counts aren't stamped 1970. It shows no camera window. Stopping it stops the dashboard too; history is kept in `backend/density.db`, and the time it was off shows as a gap.
 
@@ -210,7 +246,7 @@ Day-to-day commands:
 | `sudo systemctl disable --now densityai` | Stop it and keep it from starting at power-on. |
 | `sudo systemctl enable --now densityai` | Undo that: start it now and at every power-on. |
 
-Settings such as `INGEST_TOKEN` go in `/etc/densityai.env`, one `NAME=value` per line, then restart the service. For a Wi-Fi camera instead of USB, add `CAMERA_URI=rtsp://...` there (see [Step 12 of the runbook](docs/jetson-setup.md#step-12-wi-fi-camera-tapo-c120)).
+Settings such as `INGEST_TOKEN` and `ADMIN_PASSWORD` go in `/etc/densityai.env`, one `NAME=value` per line, then restart the service. That file is outside git because it holds passwords. For a Wi-Fi camera instead of USB, `sudo jetson/network/set-camera.sh <camera-ip>` writes `CAMERA_URI=rtsp://...` there and restarts the service (`set-camera.sh usb` goes back to the USB camera). See [Step 12 of the runbook](docs/jetson-setup.md#step-12-wi-fi-camera-tapo-c120).
 
 ### Running by hand: `npm run serve`
 
@@ -229,7 +265,7 @@ sudo systemctl start densityai
 
 - rebuilds the dashboard if the frontend, a `.env` file or `start.sh` changed since the last live build. The build never has a fixed backend address: `REACT_APP_API_URL` is ignored (with a warning if a `.env` file sets it), and the page talks to whatever address it was opened at.
 - starts the backend on port 8000, reachable from other devices, and prints every address the dashboard can be opened at: `localhost`, each IP from `hostname -I` with its interface, `<hostname>.local`, and the Tailscale name and IP if Tailscale is connected
-- waits for the USB camera, runs the pipeline, and restarts it whenever it stops. Unplugging and replugging the camera needs no command; the count shows Offline until the camera is back.
+- waits for the camera (USB, or the Wi-Fi camera in `CAMERA_URI`), runs the pipeline, and restarts it whenever it stops. Unplugging and replugging the camera needs no command; the count shows Offline until the camera is back.
 - stops everything cleanly on Ctrl+C
 
 Over SSH without `DISPLAY=:0`, the pipeline runs without its window. Extra flags go to the pipeline, for example `npm run serve -- --tracker`.
@@ -240,14 +276,17 @@ The dashboard has no fixed address: it works at any address that reaches port 80
 
 | Where | How | Open |
 |---|---|---|
-| Home Wi-Fi, your own router | Jetson and viewer on the same Wi-Fi | the Wi-Fi IP `npm run serve` prints, or `http://<hostname>.local:8000` |
-| Phone hotspot | Jetson and viewers join the hotspot | the IP printed for the Wi-Fi interface |
-| Campus, `eduroam` | Jetson and viewer both on eduroam (tested: a phone reached the dashboard) | the Wi-Fi IP `npm run serve` prints |
-| Campus, `ncsu-guest` | Device-to-device traffic may be blocked | use eduroam, USB, a phone hotspot or Tailscale instead |
-| USB cable | Jetson's USB-C port to the laptop (USB device mode) | `http://192.168.55.1:8000` |
+| **DensityAI Wi-Fi (campus, demo day)** | The Jetson's own network ([Demo setup](#demo-setup-the-densityai-wi-fi)); the camera and viewers join it | `http://10.42.0.1:8000` |
+| USB cable + Mac Internet Sharing | Mac on `ncsu` shares Wi-Fi to "Linux for Tegra" ([Demo setup](#demo-setup-the-densityai-wi-fi)) | `http://192.168.2.200:8000` |
+| USB cable, no sharing | Jetson's USB-C port to the laptop (USB device mode) | `http://192.168.55.1:8000` |
+| Home Wi-Fi, your own router | Jetson and viewer on the same Wi-Fi (Jetson not running DensityAI) | the Wi-Fi IP `npm run serve` prints, or `http://<hostname>.local:8000` |
+| Campus, `ncsu`, `ncsu-guest` | Device-to-device traffic is blocked (tested 2026-11-22: the Jetson couldn't reach the camera or the Mac) | use the DensityAI Wi-Fi |
+| Campus, `eduroam` | A phone reached the dashboard once, but the Tapo camera can't join eduroam (it needs a username login), and a Mac can't share it | use the DensityAI Wi-Fi |
+| Phone hotspot | Jetson and viewers join the hotspot. An iPhone can't pair a Tapo camera to its own hotspot | the IP printed for the Wi-Fi interface |
 | Tailscale | Jetson and viewers logged into the same tailnet; works on any network, campus included | the Tailscale name or IP printed |
 
-- **USB** is the most reliable for a single laptop on demo day: no Wi-Fi involved. The Jetson's side of the link is always `192.168.55.1`, and the laptop gets an address automatically.
+- **DensityAI** is what we use on campus: it needs no outside network, so nothing can block it. While it's on, the Jetson's Wi-Fi is busy being the network, so the Jetson's only internet is through the Mac's USB-C cable.
+- **USB** is the most reliable for a single laptop: no Wi-Fi involved. Without Internet Sharing the Jetson's side of the link is always `192.168.55.1`, and the laptop gets an address automatically. With Internet Sharing on, use `192.168.2.200`.
 - **Tailscale** setup, once on the Jetson: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`, then install the Tailscale app on each laptop or phone and log in to the same account. Restart the service (or `npm run serve`) afterwards so it prints the Tailscale address.
 - **`.local` names** need mDNS, which works from macOS, iOS and most Linux, but not always from Windows or Android. Use the IP there.
 - If SSH to the Jetson works but the page doesn't, forward the port: `ssh -L 8000:localhost:8000 <user>@<jetson-address>`, then open `http://localhost:8000` on the laptop (VS Code Remote-SSH can do this from its Ports tab).
