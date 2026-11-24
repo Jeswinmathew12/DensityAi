@@ -13,6 +13,8 @@ from .processing import fuse
 HOURS = 24
 # Minutes of data a zone needs today before the "busiest hour" insight appears.
 BUSIEST_INSIGHT_MIN = 60
+# ...and its busiest hour must have averaged at least this many people.
+BUSIEST_INSIGHT_MIN_AVG = 1
 # A gap in a zone's data longer than this (minutes) becomes an "offline" insight.
 OFFLINE_INSIGHT_MIN = 5
 
@@ -81,11 +83,15 @@ def build(conn, config, now, tz):
         zone_minutes[zone_id][minute] = fuse(list(cams.values()), mode)
 
     def hourly(minutes):
-        """{minute: value} -> 24 hourly averages, None where there is no data."""
+        """{minute: value} -> 24 hourly averages, None where there is no data.
+
+        One decimal, so a few minutes with someone in an otherwise empty hour shows as 0.2
+        instead of rounding away to 0.
+        """
         per_hour = defaultdict(list)
         for minute, value in minutes.items():
             per_hour[bucket(minute)].append(value)
-        return [round(mean(per_hour[i])) if per_hour[i] else None for i in range(HOURS)]
+        return [round(mean(per_hour[i]), 1) if per_hour[i] else None for i in range(HOURS)]
 
     trends = {
         z["id"]: [
@@ -109,7 +115,8 @@ def build(conn, config, now, tz):
         default=None,
     )
     stats = {
-        "peakHour": clock(hour_starts[peak[1]], tz) if peak else None,
+        # A day with nobody in it has no peak hour.
+        "peakHour": clock(hour_starts[peak[1]], tz) if peak and peak[0] > 0 else None,
         "avgOccupancy": round(mean(totals_today.values())) if totals_today else None,
         # No entries looks the same as line crossing being off (Demo 1), so show a dash, not 0.
         "totalVisitors": visitors_today or None,
@@ -134,7 +141,10 @@ def insights(zones, zone_minutes, now, midnight, hour_starts, hourly, tz):
 
         if len(today) >= BUSIEST_INSIGHT_MIN:
             avg, i = max((v, i) for i, v in enumerate(hourly(values)) if v is not None)
-            out.append(f"{z['name']} has been busiest at {clock(hour_starts[i], tz)} today (avg {avg} people).")
+            # "Busiest at 11 AM (avg 0 people)" says nothing, so wait for a real crowd.
+            if avg >= BUSIEST_INSIGHT_MIN_AVG:
+                out.append(f"{z['name']} has been busiest at {clock(hour_starts[i], tz)} today "
+                           f"(avg {round(avg)} of {z['capacity']} people).")
 
         # Most recent gap today, including one that is still going on.
         if now_minute - today[-1] > OFFLINE_INSIGHT_MIN:

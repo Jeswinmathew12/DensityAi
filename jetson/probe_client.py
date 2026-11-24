@@ -36,12 +36,16 @@ class ProbeClient:
         threading.Thread(target=self._run, name="densityai-sender", daemon=True).start()
 
     def send_snapshot(self, camera_id, occupancy, entries_cum, exits_cum, fps=None):
-        now = time.time()
-        if now - self.last_sent.get(camera_id, 0) < self.interval:
+        # Throttle on the monotonic clock: when NTP steps the wall clock (the Jetson has no RTC
+        # battery), a send stamped during a forward jump would otherwise block sending until
+        # the wall clock catches up, possibly a day later.
+        mono = time.monotonic()
+        last = self.last_sent.get(camera_id)
+        if last is not None and mono - last < self.interval:
             return
-        self.last_sent[camera_id] = now
+        self.last_sent[camera_id] = mono
         sample = {
-            "cameraId": camera_id, "ts": now, "occupancy": int(occupancy),
+            "cameraId": camera_id, "ts": time.time(), "occupancy": int(occupancy),
             "entriesCum": int(entries_cum), "exitsCum": int(exits_cum), "fps": fps,
         }
         with self.lock:

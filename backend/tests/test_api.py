@@ -148,3 +148,33 @@ def test_admin_ignores_stale_previews_and_unknown_cameras(admin_client, preview_
     assert admin_client.get("/api/admin/preview/cam-1", headers=ADMIN).status_code == 404
     assert admin_client.get("/api/admin/preview/..%2Fsecret", headers=ADMIN).status_code == 404
     assert admin_client.get("/api/admin/preview/cam-9", headers=ADMIN).status_code == 404
+
+
+def test_clock_step_moves_this_runs_samples_only(tmp_path, monkeypatch):
+    """Boot with a stale clock, then NTP sync: history written before the sync is moved."""
+    from types import SimpleNamespace
+    import backend.app.main as main
+
+    zones = tmp_path / "zones.json"
+    zones.write_text(json.dumps({
+        "zones": [{"id": "zone-a", "name": "Zone A", "capacity": 40, "fusion": "sum"}],
+        "cameras": [{"id": "cam-1", "zoneId": "zone-a"}],
+    }))
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    main.db.connect(str(db_path))  # create the table
+    conn.execute("INSERT INTO samples VALUES (500, 'cam-1', 'zone-a', 1, 0, 0, NULL)")  # earlier run
+    conn.commit()
+
+    clock = {"wall": 1000.0, "mono": 10.0}
+    monkeypatch.setattr(main, "time", SimpleNamespace(
+        time=lambda: clock["wall"], monotonic=lambda: clock["mono"]))
+    with TestClient(main.create_app(db_path=db_path, zones_path=zones)) as c:
+        c.post("/api/ingest", json=sample(ts=1000, sentAt=1000))
+        clock.update(wall=1001 + 86400, mono=11)  # NTP: the real date is a day later
+        c.post("/api/ingest", json=sample(ts=1001 + 86400, sentAt=1001 + 86400))
+        [zone] = c.get("/api/zones").json()
+
+    rows = conn.execute("SELECT ts FROM samples ORDER BY rowid").fetchall()
+    assert rows == [(500,), (1000 + 86400,), (1001 + 86400,)]
+    assert zone["stale"] is False
