@@ -10,6 +10,8 @@ from statistics import median
 SMOOTH_WINDOW = 5
 # A camera that hasn't posted for this long is treated as offline.
 STALE_AFTER_S = 10
+# A wall-clock change bigger than this is a step (NTP sync, `date -s`), not drift.
+CLOCK_STEP_S = 5
 
 
 def smooth(values):
@@ -49,6 +51,26 @@ def correct_ts(ts, sent_at, received_at):
     return ts + (received_at - sent_at)
 
 
+class ClockWatch:
+    """Notices when the wall clock is stepped.
+
+    The Jetson has no RTC battery, so it boots with a stale clock and NTP later moves it,
+    sometimes by a day. The monotonic clock never steps, so a change in (wall - monotonic)
+    is exactly how far the wall clock jumped.
+    """
+
+    def __init__(self, wall, mono):
+        self.offset = wall - mono
+
+    def step(self, wall, mono):
+        """Seconds the wall clock jumped since the last step (0 if it didn't)."""
+        delta = (wall - mono) - self.offset
+        if abs(delta) < CLOCK_STEP_S:
+            return 0
+        self.offset += delta
+        return delta
+
+
 def iso(ts):
     """Epoch seconds to the same ISO format as JS Date.toISOString()."""
     if ts is None:
@@ -75,9 +97,14 @@ class LiveState:
         if fps is not None:
             self.fps[camera_id] = fps
 
+    def shift(self, delta):
+        """The wall clock jumped by `delta` seconds: move our timestamps with it."""
+        self.last_seen = {cid: seen + delta for cid, seen in self.last_seen.items()}
+
     def camera_stale(self, camera_id, now):
         seen = self.last_seen.get(camera_id)
-        return seen is None or now - seen > STALE_AFTER_S
+        # Seen "in the future" means the clock went backwards; don't trust it as live.
+        return seen is None or now - seen > STALE_AFTER_S or seen > now + 1
 
     def zones_snapshot(self, now):
         out = []

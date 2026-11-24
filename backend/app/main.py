@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db, history
-from .processing import STALE_AFTER_S, LiveState, correct_ts
+from .processing import STALE_AFTER_S, ClockWatch, LiveState, correct_ts
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 # Where jetson/occupancy_pipeline.py --preview-dir keeps each camera's newest frame (in RAM).
@@ -57,6 +57,18 @@ def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None,
     state = LiveState(config)
     conn = db.connect(str(db_path))
     clients = set()
+    # Every sample this process stores is stamped with its wall clock, so if that clock is
+    # stepped (NTP sync after booting with a stale clock), all of them were off by the same
+    # amount. Rows from earlier runs may have had a different error, so they are left alone.
+    first_rowid = db.next_rowid(conn)
+    clock = ClockWatch(time.time(), time.monotonic())
+
+    def check_clock():
+        delta = clock.step(time.time(), time.monotonic())
+        if delta:
+            moved = db.shift_since(conn, first_rowid, delta)
+            state.shift(delta)
+            log.warning("Wall clock jumped %+.0f s; moved %d stored samples to match", delta, moved)
 
     async def broadcast_loop():
         """Once a second, push zones to every open dashboard if anything changed.
@@ -67,6 +79,7 @@ def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None,
         last = None
         while True:
             await asyncio.sleep(1)
+            check_clock()
             zones = state.zones_snapshot(time.time())
             if zones == last:
                 continue
@@ -109,6 +122,7 @@ def create_app(db_path=None, zones_path=None, ingest_token=None, tz=None,
         if unknown:
             raise HTTPException(404, f"Unknown camera(s) {sorted(unknown)}. Add them to backend/zones.json.")
 
+        check_clock()  # before stamping, so new rows aren't shifted along with the old ones
         now = time.time()
         rows = []
         for s in samples:

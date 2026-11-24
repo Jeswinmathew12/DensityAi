@@ -376,6 +376,7 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! \
 - **Symptom:** `apt`, `git` or `pip` fail with "not valid yet" certificate errors after a power loss.
 - **Cause:** the Jetson has no RTC battery, and `ncsu-guest` blocks NTP.
 - **Fix:** set the clock as shown in [Step 2](#step-2-network-and-clock), then install `htpdate`. With no network, set it by hand.
+- **Also:** `systemd-timesyncd` restores the last saved time at boot, so the clock can be a day or more behind without looking like 1970. When it syncs later (e.g. Ethernet plugged in), the backend notices the jump, logs `Wall clock jumped ...`, and moves the samples it stored since it started so they land at the right time. Samples from before the last backend restart are not moved. An RTC battery avoids all of this.
 
 ### 5. ncsu-guest network
 

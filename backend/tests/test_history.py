@@ -95,9 +95,24 @@ def test_insights_for_busiest_hour_and_offline_gap(conn):
         add(conn, at(15, minute), 12)
     texts = [i["text"] for i in history.build(conn, CONFIG, NOW, NY)["insights"]]
     assert texts == [
-        "Zone A has been busiest at 3:00 PM today (avg 12 people).",
+        "Zone A has been busiest at 3:00 PM today (avg 12 of 40 people).",
         "Zone A was offline 2:00 PM to 3:20 PM.",
     ]
+
+
+def test_empty_room_has_no_busiest_insight_or_peak_but_short_visits_show(conn):
+    # Someone in the room for 6 of 60 minutes: a real visit, but under one person on average.
+    for minute in range(60):
+        add(conn, at(14, minute), 2 if minute < 6 else 0)
+    h = history.build(conn, CONFIG, NOW, NY)
+    assert h["trends"]["zone-a"][-2]["occupancy"] == 0.2  # not rounded away to 0
+    assert not any("busiest" in i["text"] for i in h["insights"])
+
+    for minute in range(60):
+        add(conn, at(13, minute), 0)
+    assert history.build(conn, CONFIG, NOW, NY)["stats"]["peakHour"] == "2:00 PM"
+    conn.execute("UPDATE samples SET occupancy = 0")
+    assert history.build(conn, CONFIG, NOW, NY)["stats"]["peakHour"] is None
 
 
 def test_insight_for_camera_that_is_still_offline(conn):

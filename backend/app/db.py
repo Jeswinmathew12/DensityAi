@@ -23,6 +23,19 @@ def connect(path):
     return conn
 
 
+def next_rowid(conn):
+    """Rowid the next inserted sample will get (rows are only appended, never deleted)."""
+    return conn.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM samples").fetchone()[0]
+
+
+def shift_since(conn, first_rowid, delta):
+    """Move samples from `first_rowid` on by `delta` seconds. Returns how many moved."""
+    with conn:
+        return conn.execute(
+            "UPDATE samples SET ts = ts + ? WHERE rowid >= ?", (delta, first_rowid)
+        ).rowcount
+
+
 def insert_samples(conn, rows):
     """rows: (ts, camera_id, zone_id, occupancy, entries_cum, exits_cum, fps) tuples."""
     with conn:

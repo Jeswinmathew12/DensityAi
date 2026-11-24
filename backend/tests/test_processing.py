@@ -1,4 +1,4 @@
-from backend.app.processing import LiveState, correct_ts, fuse, smooth, zone_is_stale
+from backend.app.processing import ClockWatch, LiveState, correct_ts, fuse, smooth, zone_is_stale
 
 CONFIG = {
     "zones": [
@@ -72,3 +72,29 @@ def test_camera_back_from_outage_does_not_reuse_old_counts():
     s.add("a1", 3, received_at=200)
     s.add("a2", 0, received_at=200)
     assert s.zones_snapshot(now=200)[0]["occupancy"] == 3
+
+
+def test_clock_watch_reports_steps_not_drift():
+    w = ClockWatch(wall=1000, mono=0)
+    assert w.step(wall=1010, mono=10) == 0  # normal time passing
+    assert w.step(wall=1022, mono=20) == 0  # 2 s of drift is not a step
+    assert w.step(wall=1030 + 89424, mono=30) == 89424  # NTP sync a day forward
+    assert w.step(wall=1040 + 89424, mono=40) == 0  # and it keeps the new offset
+    assert w.step(wall=1050, mono=50) == -89424  # stepped back again
+
+
+def test_camera_seen_in_the_future_is_stale_until_it_posts_again():
+    # The clock jumped forward a day while a sample arrived, then jumped back.
+    s = LiveState(CONFIG)
+    s.add("b1", 4, received_at=100 + 86400)
+    assert s.zones_snapshot(now=101)[1]["stale"]
+    s.add("b1", 2, received_at=102)
+    b = s.zones_snapshot(now=102)[1]
+    assert (b["occupancy"], b["stale"]) == (2, False)
+
+
+def test_shift_moves_last_seen_with_the_clock():
+    s = LiveState(CONFIG)
+    s.add("b1", 4, received_at=100)
+    s.shift(86400)
+    assert not s.zones_snapshot(now=86501)[1]["stale"]
